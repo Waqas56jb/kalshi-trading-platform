@@ -48,8 +48,8 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
 input,select{font-family:inherit;color:inherit}
 a{color:inherit;text-decoration:none}
 img{max-width:100%}
-/* charts are sized from their box, never from their own attributes */
-canvas{display:block;max-width:100%}
+/* charts fill their box; the height attribute is the CSS height, not a backing-store size */
+canvas{display:block;width:100%;max-width:100%}
 .mono{font-family:var(--font-m)}
 .up{color:var(--up)}.down{color:var(--down)}
 
@@ -798,10 +798,10 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;min-width:760px}
           <button class="btn btn-ace btn-sm" onclick="goPage('alerts',document.querySelector('[data-page=alerts]'))">Review 4 open alerts</button>
         </div>
         <div class="cards4">
-          <div class="stat-card"><div class="lbl">Bankroll</div><div class="val mono">$<span data-count="12480" class="cnt">0</span></div><div class="delta up">▲ +$1,240 this week</div><canvas class="spark" data-spark="up"></canvas></div>
-          <div class="stat-card"><div class="lbl">Today's P&amp;L</div><div class="val mono up">+$<span data-count="386" class="cnt">0</span></div><div class="delta up">▲ +3.2% on deployed</div><canvas class="spark" data-spark="up"></canvas></div>
-          <div class="stat-card"><div class="lbl">Open positions</div><div class="val mono"><span data-count="6" class="cnt">0</span></div><div class="delta" style="color:var(--muted)">$2,140 at risk</div><canvas class="spark" data-spark="flat"></canvas></div>
-          <div class="stat-card"><div class="lbl">Hit rate (30d)</div><div class="val mono"><span data-count="78" class="cnt">0</span>%</div><div class="delta up">▲ 43 of 55 settled</div><canvas class="spark" data-spark="up"></canvas></div>
+          <div class="stat-card"><div class="lbl">Bankroll</div><div class="val mono">$<span data-count="12480" class="cnt">0</span></div><div class="delta up">▲ +$1,240 this week</div><canvas class="spark" height="36" data-spark="up"></canvas></div>
+          <div class="stat-card"><div class="lbl">Today's P&amp;L</div><div class="val mono up">+$<span data-count="386" class="cnt">0</span></div><div class="delta up">▲ +3.2% on deployed</div><canvas class="spark" height="36" data-spark="up"></canvas></div>
+          <div class="stat-card"><div class="lbl">Open positions</div><div class="val mono"><span data-count="6" class="cnt">0</span></div><div class="delta" style="color:var(--muted)">$2,140 at risk</div><canvas class="spark" height="36" data-spark="flat"></canvas></div>
+          <div class="stat-card"><div class="lbl">Hit rate (30d)</div><div class="val mono"><span data-count="78" class="cnt">0</span>%</div><div class="delta up">▲ 43 of 55 settled</div><canvas class="spark" height="36" data-spark="up"></canvas></div>
         </div>
         <div class="grid-2-1">
           <div class="panel">

@@ -394,7 +394,11 @@ export function createApp() {
     res.json({ settings: await repo.getSettings() });
   }));
 
-  api.patch('/settings', requireAuth, requireAdmin, h(async (req, res) => {
+  /* Strategy is the trader's own instrument, not an administrative setting.
+     Gating it on the admin role locked the desk's owner out of his own risk
+     limits: he could see a spread guard blocking a trade he wanted to take and
+     had no way to widen it. Account management below stays admin-only. */
+  api.patch('/settings', requireAuth, h(async (req, res) => {
     res.json({ settings: await repo.updateSettings(req.body ?? {}) });
   }));
 

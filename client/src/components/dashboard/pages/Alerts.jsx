@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Tag } from '../../common';
+import { ChipBtn, Tag } from '../../common';
 import { notificationsAllowed, requestNotificationPermission, soundUnlocked, unlockSound, playAlertChime } from '../../../lib/alertSound';
 import { api, fmtCountdown, fmtMatchTime, fmtNum, fmtPct, fmtTime, localZone } from '../../../lib/api';
 import { PageHead } from '../PageHead';
@@ -23,7 +23,17 @@ function Countdown({ iso }) {
   );
 }
 
-export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health, settings }) {
+const SIDES = [['all', 'All'], ['underdog', 'Underdogs'], ['favourite', 'Favourites'], ['pickem', "Pick'em"]];
+
+/** Market's own view of the side: above 55c favourite, below 45c underdog. */
+function SideTag({ side }) {
+  if (side === 'favourite') return <Tag className="bg-ace-dim text-ace">FAVOURITE</Tag>;
+  if (side === 'underdog') return <Tag className="bg-amber/15 text-amber">UNDERDOG</Tag>;
+  if (side === 'pickem') return <Tag className="bg-white/8 text-muted">PICK&apos;EM</Tag>;
+  return null;
+}
+
+export default function Alerts({ state, side, onSide, onDismiss, onDismissAll, onTrade, health, settings }) {
   const [alertsOn, setAlertsOn] = useState(() => soundUnlocked() && notificationsAllowed());
 
   /* Browsers block audio until the page has been interacted with, so this has to
@@ -52,6 +62,9 @@ export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health
                 🔔 Enable sound &amp; notifications
               </button>
             )}
+            {SIDES.map(([id, label]) => (
+              <ChipBtn key={id} on={side === id} onClick={() => onSide(id)}>{label}</ChipBtn>
+            ))}
             <button className="btn btn-ghost btn-sm" onClick={onDismissAll} disabled={!alerts.length}>
               Dismiss all
             </button>
@@ -83,9 +96,10 @@ export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health
                     {a.opponent_name ? `vs ${a.opponent_name}` : a.matchup}
                   </div>
                 </div>
-                {bigEdge
-                  ? <Tag className="bg-down/15 text-down animate-hot-pulse">BIG EDGE</Tag>
-                  : <Tag className="bg-amber/15 text-amber">EDGE</Tag>}
+                <div className="flex flex-col gap-1.5 items-end shrink-0">
+                  {bigEdge && <Tag className="bg-down/15 text-down animate-hot-pulse">BIG EDGE</Tag>}
+                  <SideTag side={a.side_type} />
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-2.5 mb-3">

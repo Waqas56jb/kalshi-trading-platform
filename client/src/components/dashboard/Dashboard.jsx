@@ -19,10 +19,12 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
   const [sbOpen, setSbOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [modalAlert, setModalAlert] = useState(null);
+  const [alertSide, setAlertSide] = useState('all');
   const [executing, setExecuting] = useState(false);
 
   const health = usePoll(() => api.health(), { intervalMs: 15000 });
-  const alerts = usePoll(() => api.alerts('open'), { intervalMs: 10000 });
+  const alerts = usePoll(() => api.alerts('open', alertSide === 'all' ? undefined : alertSide),
+    { intervalMs: 10000, deps: [alertSide] });
   const settings = usePoll(() => api.settings(), {});
 
   const goPage = (name, close = true) => {
@@ -132,7 +134,8 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
           {page === 'markets' && <Markets search={query} onTrade={setModalAlert} />}
           {page === 'alerts' && (
             <Alerts
-              state={alerts} onDismiss={dismissAlert} onDismissAll={dismissAll}
+              state={alerts} side={alertSide} onSide={setAlertSide}
+              onDismiss={dismissAlert} onDismissAll={dismissAll}
               onTrade={setModalAlert} health={h} settings={cfg}
             />
           )}

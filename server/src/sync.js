@@ -2,7 +2,7 @@ import { config, t } from './config.js';
 import { query, tx } from './db.js';
 import {
   buildSignalsForEvent, classifySchedule, dayIn, dollarsToCents, looksInPlay,
-  matchDateFromTicker, parseMarketTitle, toNum,
+  matchDateFromTicker, parseMarketTitle, sideType, toNum,
 } from './model.js';
 
 /** Normalises one raw Kalshi market row into our column shape. */
@@ -280,16 +280,21 @@ async function computeSignals(client, rows, settings) {
     return null;                                     // actionable
   };
 
-  for (const s of rated) s.review_reason = review(s);
+  for (const s of rated) {
+    s.review_reason = review(s);
+    s.side_type = sideType(s.market_cents);
+  }
   const col = f => rated.map(f);
 
   await client.query(
     `insert into ${t('signals')}
        (ticker, event_ticker, player_name, opponent_name, player_utr, opponent_utr,
-        utr_gap, fair_cents, market_cents, ev_pct, model, is_actionable, review_reason, computed_at)
+        utr_gap, fair_cents, market_cents, ev_pct, model, is_actionable, review_reason,
+        side_type, computed_at)
      select *, now() from unnest(
        $1::text[], $2::text[], $3::text[], $4::text[], $5::numeric[], $6::numeric[],
-       $7::numeric[], $8::int[], $9::int[], $10::numeric[], $11::text[], $12::boolean[], $13::text[])
+       $7::numeric[], $8::int[], $9::int[], $10::numeric[], $11::text[], $12::boolean[], $13::text[],
+       $14::text[])
      on conflict (ticker) do update set
        event_ticker = excluded.event_ticker, player_name = excluded.player_name,
        opponent_name = excluded.opponent_name, player_utr = excluded.player_utr,
@@ -297,7 +302,7 @@ async function computeSignals(client, rows, settings) {
        fair_cents = excluded.fair_cents, market_cents = excluded.market_cents,
        ev_pct = excluded.ev_pct, model = excluded.model,
        is_actionable = excluded.is_actionable, review_reason = excluded.review_reason,
-       computed_at = now()`,
+       side_type = excluded.side_type, computed_at = now()`,
     [
       col(s => s.ticker), col(s => s.event_ticker), col(s => s.player_name),
       col(s => s.opponent_name), col(s => s.player_utr), col(s => s.opponent_utr),
@@ -305,6 +310,7 @@ async function computeSignals(client, rows, settings) {
       col(s => s.ev_pct), col(s => s.model),
       col(s => s.review_reason === null),
       col(s => s.review_reason),
+      col(s => s.side_type),
     ],
   );
 
@@ -368,9 +374,9 @@ async function reconcileAlerts(client, settings) {
   const created = await client.query(
     `insert into ${t('alerts')}
        (ticker, event_ticker, player_name, matchup, tournament, utr_gap,
-        fair_cents, market_cents, ev_pct, volume_available, starts_at)
+        fair_cents, market_cents, ev_pct, volume_available, starts_at, side_type)
      select s.ticker, s.event_ticker, s.player_name, e.matchup, e.tournament, s.utr_gap,
-            s.fair_cents, s.market_cents, s.ev_pct, m.yes_ask_size, m.occurrence_datetime
+            s.fair_cents, s.market_cents, s.ev_pct, m.yes_ask_size, m.occurrence_datetime, s.side_type
      from ${t('signals')} s
      join ${t('markets')} m on m.ticker = s.ticker
      left join ${t('events')} e on e.event_ticker = s.event_ticker
@@ -380,6 +386,13 @@ async function reconcileAlerts(client, settings) {
          select 1 from ${t('alerts')} a where a.ticker = s.ticker and a.status = 'open')
      on conflict do nothing
      returning id`,
+  );
+
+  /* Alerts raised before side_type existed have it null; take it from the signal. */
+  await client.query(
+    `update ${t('alerts')} a set side_type = s.side_type
+     from ${t('signals')} s
+     where s.ticker = a.ticker and a.side_type is null and s.side_type is not null`,
   );
 
   /* Alerts raised before `starts_at` existed have it null. Fill it in from the

@@ -285,7 +285,8 @@ export function createApp() {
   /* ----------------------------------------------------------------- alerts */
 
   api.get('/alerts', requireAuth, h(async (req, res) => {
-    res.json({ alerts: await repo.listAlerts({ status: String(req.query.status ?? 'open') }) });
+    const side = ['favourite', 'underdog', 'pickem'].includes(req.query.side) ? req.query.side : 'all';
+    res.json({ alerts: await repo.listAlerts({ status: String(req.query.status ?? 'open'), side }) });
   }));
 
   api.post('/alerts/:id/dismiss', requireAuth, h(async (req, res) => {

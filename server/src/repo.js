@@ -31,7 +31,7 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
             e.matchup, e.tournament, e.round, e.tour_level,
             e.scheduled_at, e.schedule_confidence, e.schedule_source,
             s.fair_cents, s.ev_pct, s.utr_gap, s.player_utr, s.opponent_utr,
-            s.opponent_name, s.is_actionable,
+            s.opponent_name, s.is_actionable, s.side_type,
             -- absolute edge in cents. Percentage EV explodes on cheap contracts
             -- (a 1c error on a 3c ask reads as +33%), so the UI ranks on this too.
             (s.fair_cents - s.market_cents) as edge_cents,
@@ -52,6 +52,8 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
              when 'mispriced' then coalesce(s.is_actionable, false)
              when 'rated'     then s.fair_cents is not null
              when 'inplay'    then m.play_state = 'in_play'
+             when 'favourite' then s.side_type = 'favourite'
+             when 'underdog'  then s.side_type = 'underdog'
              when 'upcoming'  then m.play_state = 'not_started'
                                     and coalesce(m.match_date, current_date)
                                         >= (now() at time zone 'America/Los_Angeles')::date
@@ -121,7 +123,7 @@ export async function expireStartedAlerts() {
   return r.rowCount ?? 0;
 }
 
-export async function listAlerts({ status = 'open', limit = 50 } = {}) {
+export async function listAlerts({ status = 'open', side = 'all', limit = 50 } = {}) {
   // never hand back an alert whose match has started, whatever the sync did
   if (status === 'open') await expireStartedAlerts().catch(() => {});
 
@@ -139,9 +141,10 @@ export async function listAlerts({ status = 'open', limit = 50 } = {}) {
      where ($1 = 'any' or a.status = $1)
        -- belt and braces: even a row the update above missed cannot surface
        and ($1 <> 'open' or a.starts_at is null or a.starts_at > now())
-     order by a.starts_at asc nulls last, a.ev_pct desc nulls last
+       and ($3 = 'all' or a.side_type = $3)
+     order by (a.fair_cents - a.market_cents) desc nulls last, a.ev_pct desc nulls last
      limit $2`,
-    [status, limit],
+    [status, limit, side],
   );
   return r.rows;
 }

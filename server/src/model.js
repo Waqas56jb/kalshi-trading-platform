@@ -216,3 +216,17 @@ export function looksInPlay({
   if (recentMoveCents != null && recentMoveCents >= moveThreshold) return 'price_moving_like_in_play';
   return null;
 }
+
+/**
+ * Whether a price represents the favourite or the underdog.
+ *
+ * A Kalshi contract settles at $1, so its price is the market's probability: above
+ * 50c is the side expected to win. The narrow band around even money is called out
+ * separately because "favourite" means little at 49c.
+ */
+export function sideType(priceCents) {
+  if (priceCents == null) return null;
+  if (priceCents >= 55) return 'favourite';
+  if (priceCents <= 45) return 'underdog';
+  return 'pickem';
+}

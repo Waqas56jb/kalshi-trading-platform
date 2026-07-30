@@ -85,7 +85,7 @@ export const api = {
   markets: q => get('/api/markets', q),
   priceHistory: (ticker, limit) => get(`/api/markets/${encodeURIComponent(ticker)}/history`, { limit }),
 
-  alerts: status => get('/api/alerts', { status }),
+  alerts: (status, side) => get('/api/alerts', { status, side }),
   dismissAlert: id => call('POST', `/api/alerts/${id}/dismiss`),
   dismissAllAlerts: () => call('POST', '/api/alerts/dismiss-all'),
   executeAlert: (id, contracts) => call('POST', `/api/alerts/${id}/execute`, contracts ? { contracts } : {}),

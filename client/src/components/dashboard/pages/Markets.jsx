@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { ChipBtn, StatusTag } from '../../common';
+import { ChipBtn, StatusTag, Tag } from '../../common';
 import { usePoll } from '../../../hooks/useApi';
 import { api, DESK_TZ, fmtMatchTime, fmtNum, fmtPct, localZone } from '../../../lib/api';
 import { PageHead } from '../PageHead';
 import { Empty, ErrorBox, Loading } from '../Notices';
 
 const FILTERS = [['all', 'All'], ['upcoming', 'Not started'], ['mispriced', 'Mispriced'],
-  ['rated', 'Priced'], ['inplay', 'In play']];
+  ['underdog', 'Underdogs'], ['favourite', 'Favourites'], ['inplay', 'In play']];
 const SORTS = [['edge', 'Edge'], ['starts', 'Start time'], ['ev', 'EV %']];
 
 /**
@@ -143,7 +143,13 @@ export default function Markets({ search, onTrade }) {
                     {fmtPct(m.ev_pct)}
                   </td>
                   <td className="font-mono text-muted">{fmtNum(m.volume)}</td>
-                  <td><StatusTag m={m} /></td>
+                  <td>
+                    <div className="flex flex-col gap-1 items-start">
+                      <StatusTag m={m} />
+                      {m.side_type === 'favourite' && <Tag className="bg-ace-dim text-ace">FAV</Tag>}
+                      {m.side_type === 'underdog' && <Tag className="bg-amber/15 text-amber">DOG</Tag>}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

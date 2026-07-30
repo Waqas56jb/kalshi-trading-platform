@@ -68,7 +68,7 @@ export default function Trades({ user }) {
         title="Trade history"
         sub="Every execution attempt, fill and settlement on this desk"
         action={
-          <div className="flex gap-2 items-center flex-wrap">
+          <div className="flex gap-2 items-center flex-wrap max-sm:w-full">
             {FILTERS.map(([id, label]) => (
               <ChipBtn key={id} on={filter === id} onClick={() => setFilter(id)}>{label}</ChipBtn>
             ))}

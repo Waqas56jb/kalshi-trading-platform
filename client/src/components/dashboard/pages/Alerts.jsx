@@ -56,10 +56,10 @@ export default function Alerts({ state, side, onSide, onDismiss, onDismissAll, o
           ? 'Pre-match only · matches today or later whose book shows no sign of play'
           : 'Opportunities above your EV threshold'}
         action={
-          <div className="flex gap-2.5 items-center">
+          <div className="flex gap-2.5 items-center flex-wrap max-sm:w-full">
             {!alertsOn && (
               <button className="btn btn-ghost btn-sm" onClick={enableAlerts}>
-                🔔 Enable sound &amp; notifications
+                🔔 <span className="max-sm:hidden">Enable sound &amp; notifications</span><span className="hidden max-sm:inline">Sound</span>
               </button>
             )}
             {SIDES.map(([id, label]) => (

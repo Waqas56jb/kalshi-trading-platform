@@ -76,7 +76,7 @@ export default function Markets({ search, onTrade }) {
             + `${localZone()} — play state read from the order book`
           : 'Streaming from the Kalshi Trade API'}
         action={
-          <div className="flex gap-2 items-center flex-wrap">
+          <div className="flex gap-2 items-center flex-wrap max-sm:w-full">
             {FILTERS.map(([id, label]) => (
               <ChipBtn key={id} on={filter === id} onClick={() => setFilter(id)}>{label}</ChipBtn>
             ))}

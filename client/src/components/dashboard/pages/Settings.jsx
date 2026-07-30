@@ -7,6 +7,10 @@ import { ErrorBox, Loading } from '../Notices';
 import { MyAccountPanel, TeamPanel } from './AccountPanels';
 
 const TOGGLES = [
+  ['prematch_only', 'Pre-match alerts only',
+   'Never alert on a match that is under way. In-play prices move on what is happening on court, which the model cannot see.'],
+  ['sound_enabled', 'Alert sound',
+   'Play a chime and raise a desktop notification when a new alert arrives.'],
   ['paper_trading', 'Paper trading',
    'Record positions at the real ask without sending an order to Kalshi. Settles against the real result.'],
   ['manual_approval', 'Manual approval required', 'Every order needs your tap before it fires'],
@@ -24,6 +28,13 @@ const NUMBERS = [
 /* Liquidity and sanity guards. Without these the actionable queue fills with
    decided matches: a 0/1c quote against a strong favourite is what a withdrawal
    looks like, and no ratings model can see one. */
+const TIMING = [
+  ['alert_lead_minutes', 'Minimum lead time (minutes)', 0, 1,
+   'A match must be at least this far away to raise an alert, so there is time to act on it.'],
+  ['alert_max_hours', 'Maximum horizon (hours)', 1, 1,
+   'Ignore matches further out than this — quotes that far ahead are thin and stale.'],
+];
+
 const GUARDS = [
   ['min_bid_cents', 'Minimum bid (¢)', 0, 1,
    'Below this nobody is really making a market on this player.'],
@@ -57,6 +68,7 @@ export default function Settings({ state, user, onUserChange }) {
         stake_per_trade: Number(form.stake_per_trade),
         max_exposure_per_match: Number(form.max_exposure_per_match),
         ...Object.fromEntries(GUARDS.map(([k]) => [k, Number(form[k])])),
+        ...Object.fromEntries(TIMING.map(([k]) => [k, Number(form[k])])),
         ...Object.fromEntries(TOGGLES.map(([k]) => [k, !!form[k]])),
       };
       const r = await api.saveSettings(patch);
@@ -155,6 +167,22 @@ export default function Settings({ state, user, onUserChange }) {
                 value={form[k]}
                 onChange={e => set(k, e.target.value)}
               />
+            </div>
+          ))}
+        </Panel>
+
+        <Panel title="Alert timing">
+          <p className="text-[12.5px] text-muted mb-4.5">
+            Kalshi publishes a half-hour scheduling slot rather than a first-serve time, and ITF start
+            times slip. The slot is treated as the earliest a match can begin, so an alert is dropped a
+            little early rather than shown once play is under way.
+          </p>
+          {TIMING.map(([k, label, min, step, help]) => (
+            <div className="fld mb-4.5" key={k}>
+              <Label>{label}</Label>
+              <input type="number" min={min} step={step} value={form[k] ?? ''}
+                onChange={e => set(k, e.target.value)} />
+              <p className="text-[11.5px] text-muted2 mt-1.5">{help}</p>
             </div>
           ))}
         </Panel>

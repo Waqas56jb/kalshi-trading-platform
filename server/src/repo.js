@@ -79,7 +79,36 @@ export async function priceHistory(ticker, limit = 200) {
 
 /* ------------------------------------------------------------------- alerts */
 
+/**
+ * Closes open alerts whose match has begun.
+ *
+ * Run on every read rather than only during a sync. Kalshi's
+ * `occurrence_datetime` is a half-hour scheduling slot, not the first serve, and
+ * on Vercel's Hobby plan cron fires once a day — so relying on the sync to expire
+ * alerts left in-play matches sitting in the queue for hours. Because the slot is
+ * the *earliest* a match can start, treating it as the cut-off errs towards
+ * dropping a still-upcoming alert rather than showing one that is already live,
+ * which is the direction the desk wants.
+ */
+export async function expireStartedAlerts() {
+  const r = await query(
+    `with cfg as (select prematch_only, alert_lead_minutes from ${t('settings')} where id = 1)
+     update ${t('alerts')} a set status = 'expired', resolved_at = now()
+     from cfg
+     where a.status = 'open' and cfg.prematch_only
+       and (
+         a.starts_at is null
+         or a.starts_at <= now() + make_interval(mins => cfg.alert_lead_minutes)
+       )
+     returning a.id`,
+  );
+  return r.rowCount ?? 0;
+}
+
 export async function listAlerts({ status = 'open', limit = 50 } = {}) {
+  // never hand back an alert whose match has started, whatever the sync did
+  if (status === 'open') await expireStartedAlerts().catch(() => {});
+
   const r = await query(
     `select a.*, m.yes_ask_size, m.volume, e.round, e.tour_level,
             m.occurrence_datetime as market_starts_at,
@@ -91,7 +120,9 @@ export async function listAlerts({ status = 'open', limit = 50 } = {}) {
      left join ${t('markets')} m on m.ticker = a.ticker
      left join ${t('events')} e on e.event_ticker = a.event_ticker
      where ($1 = 'any' or a.status = $1)
-     order by a.ev_pct desc nulls last, a.created_at desc
+       -- belt and braces: even a row the update above missed cannot surface
+       and ($1 <> 'open' or a.starts_at is null or a.starts_at > now())
+     order by a.starts_at asc nulls last, a.ev_pct desc nulls last
      limit $2`,
     [status, limit],
   );

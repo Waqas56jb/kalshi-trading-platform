@@ -224,10 +224,16 @@ async function computeSignals(client, rows, settings) {
        court, so an in-play quote is not something it can reason about. The lead
        time keeps out alerts that arrive too late to act on. */
     if (prematchOnly) {
+      /* A near-certain quote is itself evidence the match is under way or already
+         decided: those prices do not occur before a ball is struck. This matters
+         because `occurrence_datetime` is only a half-hour scheduling slot — ITF
+         start times slip — so the clock alone cannot be trusted to tell pre-match
+         from in-play. */
+      if (bid != null && (bid <= 2 || bid >= 97)) return 'price_implies_in_play';
+
       const startsAt = m?.occurrence_datetime ? new Date(m.occurrence_datetime).getTime() : null;
       if (startsAt == null) return 'no_start_time';
-      if (startsAt <= now) return 'match_already_started';
-      if (startsAt - now < leadMs) return 'too_close_to_start';
+      if (startsAt - now < leadMs) return 'started_or_too_close';
       if (startsAt - now > maxAheadMs) return 'too_far_ahead';
     }
     return null;                                     // actionable

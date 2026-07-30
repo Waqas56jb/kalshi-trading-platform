@@ -37,29 +37,37 @@ A single-segment check alone would have passed while nested routes were broken.
 
 ### Environment variables
 
-| name | value |
-|---|---|
-| `DATABASE_URL` | `postgresql://postgres.<ref>:<password>@aws-1-ap-south-1.pooler.supabase.com:5432/postgres` |
-| `KALSHI_API_BASE` | `https://api.elections.kalshi.com/trade-api/v2` |
-| `KALSHI_API_KEY_ID` | your Kalshi API key id |
-| `KALSHI_PRIVATE_KEY` | the full PEM, `-----BEGIN…` to `-----END…` |
-| `SUPABASE_URL` | `https://<ref>.supabase.co` |
-| `SUPABASE_PROJECT_REF` | `<ref>` |
-| `DB_TABLE_PREFIX` | `kalshi_` |
-| `SERIES_TICKERS` | `KXITFMATCH,KXITFWMATCH` |
-| `CRON_SECRET` | any long random string — guards the cron endpoints |
-| `CORS_ORIGIN` | your frontend URL, e.g. `https://kalshi-trading-platform-user.vercel.app` |
+Do **not** paste `server/.env` wholesale. Half of it is for local development
+only, and one line actively breaks the deployment. These are the variables the
+backend actually reads in production:
 
-Notes:
+| name | value | why |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://postgres.<ref>:<password>@aws-1-ap-south-1.pooler.supabase.com:5432/postgres` | required |
+| `KALSHI_API_KEY_ID` | your Kalshi API key id | required |
+| `KALSHI_PRIVATE_KEY` | the full PEM, `-----BEGIN…` to `-----END…` | required |
+| `KALSHI_API_BASE` | `https://api.elections.kalshi.com/trade-api/v2` | required |
+| `DB_TABLE_PREFIX` | `kalshi_` | required |
+| `SERIES_TICKERS` | `KXITFMATCH,KXITFWMATCH` | optional, this is the default |
+| `CRON_SECRET` | any long random string | guards the cron endpoints |
+| `NODE_ENV` | `production` | without it CORS accepts any localhost origin |
+| `CORS_ORIGIN` | your frontend URL | only needed for a custom domain; any `*.vercel.app` is already allowed |
 
-- **Do not set `NODE_ENV`.** Vercel sets it at runtime. Setting it to
-  `production` makes npm skip devDependencies, which breaks builds.
-- Percent-encode special characters in the DB password (`!` → `%21`).
-- The private key is an env var rather than a file because a serverless
-  filesystem has nowhere to keep a secret. Newlines pasted as literal `\n` are
-  restored automatically.
-- Any `*.vercel.app` origin is accepted by CORS, so `CORS_ORIGIN` is only needed
-  for a custom domain.
+**Never set `KALSHI_PRIVATE_KEY_PATH` on Vercel.** The `.pem` it points at is
+gitignored and never deployed, so the read throws while the module is loading and
+every route dies with `FUNCTION_INVOCATION_FAILED`. Use `KALSHI_PRIVATE_KEY`
+instead — literal `\n` in the pasted value is restored automatically.
+
+`NODE_ENV=production` is correct here but **must not be set on the frontend
+project**, where it makes npm skip devDependencies and `vite` disappears.
+
+These lines from `.env` do nothing in production and can be left out: `PORT`
+(serverless assigns its own), `POLL_INTERVAL_MS` (only the in-process sync loop
+uses it), `MIN_EV_THRESHOLD`, `STAKE_PER_TRADE`, `MAX_EXPOSURE_PER_MATCH` (read
+from the `kalshi_settings` table, not the environment), `SUPABASE_DB_PASSWORD`
+and `SUPABASE_PUBLISHABLE_KEY` (the backend only uses `DATABASE_URL`).
+
+Percent-encode special characters in the DB password (`!` → `%21`).
 
 ### Confirm it works
 

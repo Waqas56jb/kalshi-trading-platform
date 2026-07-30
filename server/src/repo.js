@@ -27,6 +27,7 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
             m.yes_bid_cents, m.yes_ask_cents, m.last_price_cents,
             m.yes_ask_size, m.volume, m.volume_24h, m.open_interest, m.liquidity,
             m.close_time, m.occurrence_datetime, m.match_date,
+            m.play_state, m.volume_growth_3h,
             e.matchup, e.tournament, e.round, e.tour_level,
             e.scheduled_at, e.schedule_confidence, e.schedule_source,
             s.fair_cents, s.ev_pct, s.utr_gap, s.player_utr, s.opponent_utr,
@@ -50,7 +51,10 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
        and case $2
              when 'mispriced' then coalesce(s.is_actionable, false)
              when 'rated'     then s.fair_cents is not null
-             when 'inplay'    then m.match_date < (now() at time zone 'America/Los_Angeles')::date
+             when 'inplay'    then m.play_state = 'in_play'
+             when 'upcoming'  then m.play_state = 'not_started'
+                                    and coalesce(m.match_date, current_date)
+                                        >= (now() at time zone 'America/Los_Angeles')::date
              when 'all'       then coalesce(m.match_date, current_date)
                                     >= (now() at time zone 'America/Los_Angeles')::date
              else true
@@ -452,7 +456,7 @@ const SETTABLE = new Set([
   'min_ev_threshold', 'stake_per_trade', 'max_exposure_per_match', 'min_utr_gap',
   'manual_approval', 'sweep_full_volume', 'pushover_enabled', 'sms_fallback',
   'inplay_enabled', 'bot_enabled', 'paper_trading',
-  'min_bid_cents', 'max_spread_cents', 'max_edge_cents',
+  'min_bid_cents', 'max_spread_cents', 'max_edge_cents', 'inplay_volume_threshold',
   'prematch_only', 'alert_lead_minutes', 'alert_max_hours', 'sound_enabled',
   'display_timezone', 'odds_divergence_cents', 'odds_alerts_enabled',
 ]);

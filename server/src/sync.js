@@ -185,17 +185,19 @@ async function recordPriceHistory(client, rows) {
 }
 
 /** Largest mid-price swing per ticker in the recent past, in cents. */
-async function recentMoves(client, tickers, minutes = 90) {
+async function bookActivity(client, tickers) {
   if (!tickers.length) return new Map();
   const r = await client.query(
-    `select ticker, (max(mid_cents) - min(mid_cents))::int as move
+    `select ticker,
+            (max(mid_cents) filter (where captured_at > now() - interval '90 minutes')
+             - min(mid_cents) filter (where captured_at > now() - interval '90 minutes'))::int as move,
+            (max(volume) - min(volume)) as vol_growth
      from ${t('price_history')}
-     where ticker = any($1::text[]) and captured_at > now() - make_interval(mins => $2)
-       and mid_cents is not null
+     where ticker = any($1::text[]) and captured_at > now() - interval '3 hours'
      group by ticker`,
-    [tickers, minutes],
+    [tickers],
   );
-  return new Map(r.rows.map(x => [x.ticker, x.move]));
+  return new Map(r.rows.map(x => [x.ticker, { move: x.move, volGrowth: Number(x.vol_growth ?? 0) }]));
 }
 
 async function computeSignals(client, rows, settings) {
@@ -229,7 +231,8 @@ async function computeSignals(client, rows, settings) {
   const now = Date.now();
 
   const byTicker = new Map(rows.map(r => [r.ticker, r]));
-  const moves = await recentMoves(client, rows.map(r => r.ticker));
+  const activity = await bookActivity(client, rows.map(r => r.ticker));
+  const volThreshold = Number(settings.inplay_volume_threshold ?? 150);
   const todayPT = dayIn(new Date());
 
   /**
@@ -265,7 +268,13 @@ async function computeSignals(client, rows, settings) {
       if (matchDay < todayPT) return 'match_day_passed';
       if (matchDay > dayIn(new Date(now + maxAheadMs))) return 'too_far_ahead';
 
-      const inPlay = looksInPlay({ bid, ask, recentMoveCents: moves.get(s.ticker) });
+      const act = activity.get(s.ticker);
+      const inPlay = looksInPlay({
+        bid, ask,
+        recentMoveCents: act?.move,
+        volumeGrowth3h: act?.volGrowth,
+        volumeThreshold: volThreshold,
+      });
       if (inPlay) return inPlay;
     }
     return null;                                     // actionable
@@ -328,6 +337,33 @@ async function computeSignals(client, rows, settings) {
 }
 
 /** Opens alerts for newly actionable signals; expires ones that no longer qualify. */
+/** Persists the inferred play state so the desk can label each market. */
+async function recordPlayState(client, rows, settings) {
+  if (!rows.length) return 0;
+  const act = await bookActivity(client, rows.map(r => r.ticker));
+  const threshold = Number(settings.inplay_volume_threshold ?? 150);
+
+  const states = rows.map(r => {
+    const a = act.get(r.ticker);
+    const verdict = looksInPlay({
+      bid: r.yes_bid_cents, ask: r.yes_ask_cents,
+      recentMoveCents: a?.move, volumeGrowth3h: a?.volGrowth, volumeThreshold: threshold,
+    });
+    // with no history yet there is nothing to judge, so say so rather than guess
+    if (!a && verdict === null) return 'unknown';
+    return verdict ? 'in_play' : 'not_started';
+  });
+
+  await client.query(
+    `update ${t('markets')} m set play_state = x.state, volume_growth_3h = x.grow
+     from (select * from unnest($1::text[], $2::text[], $3::numeric[])
+             as u(ticker, state, grow)) x
+     where m.ticker = x.ticker`,
+    [rows.map(r => r.ticker), states, rows.map(r => act.get(r.ticker)?.volGrowth ?? null)],
+  );
+  return rows.length;
+}
+
 async function reconcileAlerts(client, settings) {
   const created = await client.query(
     `insert into ${t('alerts')}
@@ -407,6 +443,7 @@ export async function runSync(kalshi, { verbose = false } = {}) {
       const upserted = await upsertMarkets(client, rows);
       const ticks = await recordPriceHistory(client, rows);
       const sig = await computeSignals(client, rows, settings);
+      await recordPlayState(client, rows, settings);
       const alerts = await reconcileAlerts(client, settings);
       return { events, upserted, ticks, ...sig, ...alerts };
     });

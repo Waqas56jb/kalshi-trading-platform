@@ -18,9 +18,7 @@
   ],
 
   "crons": [
-    { "path": "/api/sync", "schedule": "* * * * *" },
-    { "path": "/api/ratings/backfill?limit=40", "schedule": "*/30 * * * *" },
-    { "path": "/api/trades/reconcile", "schedule": "*/5 * * * *" },
-    { "path": "/api/portfolio/snapshot", "schedule": "*/15 * * * *" }
+    { "path": "/api/sync", "schedule": "0 6 * * *" },
+    { "path": "/api/ratings/backfill?limit=60", "schedule": "30 6 * * *" }
   ]
 }

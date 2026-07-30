@@ -43,9 +43,8 @@ export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health
       <PageHead
         title="Mispricing alerts"
         sub={settings?.prematch_only !== false
-          ? `Pre-match only · at least ${settings?.alert_lead_minutes ?? 10} min before the scheduled slot`
-            + ` · times in ${localZone()}`
-          : `Opportunities above your EV threshold · times in ${localZone()}`}
+          ? 'Pre-match only · matches today or later whose book shows no sign of play'
+          : 'Opportunities above your EV threshold'}
         action={
           <div className="flex gap-2.5 items-center">
             {!alertsOn && (
@@ -116,7 +115,9 @@ export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health
               </div>
 
               <div className="font-mono text-[11px] mt-3 flex justify-between gap-2">
-                <Countdown iso={a.starts_at ?? a.market_starts_at} />
+                <span className="text-muted">
+                  pre-match · not yet started
+                </span>
                 <span className="text-muted2">opened {fmtTime(a.created_at)}</span>
               </div>
             </div>

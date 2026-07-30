@@ -160,3 +160,52 @@ export function classifySchedule(occurrenceIso) {
   }
   return { confidence: 'slot', source: 'kalshi_slot' };
 }
+
+const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
+  JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
+
+/**
+ * Match date, parsed from the Kalshi ticker.
+ *
+ * `KXITFMATCH-26JUL30ZEUSMI-SMI` encodes 2026-07-30, and this is the one piece of
+ * timing Kalshi gets right — it agreed with `occurrence_datetime`'s date on 366 of
+ * 400 sampled markets, the exceptions being ones whose expiry estimate spills past
+ * midnight UTC.
+ *
+ * `occurrence_datetime` itself is NOT a start time: it is identical to
+ * `expected_expiration_time`, i.e. roughly when the match should be over. For
+ * ITF M25 Koszalin it read 18:00Z while the match actually began at 13:27Z — 4h33m
+ * earlier, about one match's duration. So the day comes from here and the clock
+ * time has to come from a real schedule source.
+ */
+export function matchDateFromTicker(ticker) {
+  const m = /^KX[A-Z0-9]+-(\d{2})([A-Z]{3})(\d{2})/.exec(String(ticker ?? ''));
+  if (!m || !(m[2] in MONTHS)) return null;
+  /* Returned as a plain YYYY-MM-DD string, never a Date. The ticker carries a
+     calendar date with no timezone; wrapping it in a UTC Date and then rendering
+     that in Pacific shifts it back a day, which made every match look as though it
+     had already happened. */
+  const month = String(MONTHS[m[2]] + 1).padStart(2, '0');
+  return `20${m[1]}-${month}-${m[3]}`;
+}
+
+/** Calendar day in a given zone, as YYYY-MM-DD. */
+export function dayIn(date, timeZone = 'America/Los_Angeles') {
+  return new Date(date).toLocaleDateString('en-CA', { timeZone });
+}
+
+/**
+ * Whether a market looks like it is in play or already decided, judged from the
+ * book rather than a clock.
+ *
+ * This exists because Kalshi publishes no start time. Two signals the trader
+ * identified and the data confirms:
+ *  - a quote at or beyond 2c/97c does not occur before a ball is struck;
+ *  - a pre-match book barely moves, while an in-play one swings hard.
+ */
+export function looksInPlay({ bid, ask, recentMoveCents, moveThreshold = 8 }) {
+  if (bid != null && (bid <= 2 || bid >= 97)) return 'price_implies_in_play';
+  if (ask != null && (ask <= 2 || ask >= 98)) return 'price_implies_in_play';
+  if (recentMoveCents != null && recentMoveCents >= moveThreshold) return 'price_moving_like_in_play';
+  return null;
+}

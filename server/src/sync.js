@@ -1,7 +1,8 @@
 import { config, t } from './config.js';
 import { query, tx } from './db.js';
 import {
-  buildSignalsForEvent, classifySchedule, dollarsToCents, parseMarketTitle, toNum,
+  buildSignalsForEvent, classifySchedule, dayIn, dollarsToCents, looksInPlay,
+  matchDateFromTicker, parseMarketTitle, toNum,
 } from './model.js';
 
 /** Normalises one raw Kalshi market row into our column shape. */
@@ -28,6 +29,7 @@ function normalise(raw) {
     liquidity: toNum(raw.liquidity_dollars),
     close_time: raw.close_time ?? null,
     occurrence_datetime: raw.occurrence_datetime ?? null,
+    match_date: matchDateFromTicker(raw.ticker),
     parsed,
     raw,
   };
@@ -111,12 +113,12 @@ async function upsertMarkets(client, rows) {
        (ticker, event_ticker, series_ticker, competitor_id, player_name, title, status,
         yes_bid_cents, yes_ask_cents, no_bid_cents, no_ask_cents, last_price_cents,
         yes_bid_size, yes_ask_size, volume, volume_24h, open_interest, liquidity,
-        close_time, occurrence_datetime, raw, updated_at)
+        close_time, occurrence_datetime, match_date, raw, updated_at)
      select *, now() from unnest(
        $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[],
        $8::int[], $9::int[], $10::int[], $11::int[], $12::int[],
        $13::numeric[], $14::numeric[], $15::numeric[], $16::numeric[], $17::numeric[], $18::numeric[],
-       $19::timestamptz[], $20::timestamptz[], $21::jsonb[])
+       $19::timestamptz[], $20::timestamptz[], $21::date[], $22::jsonb[])
      on conflict (ticker) do update set
        event_ticker = excluded.event_ticker, series_ticker = excluded.series_ticker,
        competitor_id = excluded.competitor_id, player_name = excluded.player_name,
@@ -128,6 +130,7 @@ async function upsertMarkets(client, rows) {
        volume = excluded.volume, volume_24h = excluded.volume_24h,
        open_interest = excluded.open_interest, liquidity = excluded.liquidity,
        close_time = excluded.close_time, occurrence_datetime = excluded.occurrence_datetime,
+       match_date = excluded.match_date,
        raw = excluded.raw, updated_at = now()`,
     [
       col(r => r.ticker), col(r => r.event_ticker), col(r => r.series_ticker),
@@ -136,7 +139,7 @@ async function upsertMarkets(client, rows) {
       col(r => r.no_ask_cents), col(r => r.last_price_cents),
       col(r => r.yes_bid_size), col(r => r.yes_ask_size), col(r => r.volume),
       col(r => r.volume_24h), col(r => r.open_interest), col(r => r.liquidity),
-      col(r => r.close_time), col(r => r.occurrence_datetime),
+      col(r => r.close_time), col(r => r.occurrence_datetime), col(r => r.match_date),
       col(r => JSON.stringify(r.raw)),
     ],
   );
@@ -181,6 +184,20 @@ async function recordPriceHistory(client, rows) {
   return res.rowCount ?? 0;
 }
 
+/** Largest mid-price swing per ticker in the recent past, in cents. */
+async function recentMoves(client, tickers, minutes = 90) {
+  if (!tickers.length) return new Map();
+  const r = await client.query(
+    `select ticker, (max(mid_cents) - min(mid_cents))::int as move
+     from ${t('price_history')}
+     where ticker = any($1::text[]) and captured_at > now() - make_interval(mins => $2)
+       and mid_cents is not null
+     group by ticker`,
+    [tickers, minutes],
+  );
+  return new Map(r.rows.map(x => [x.ticker, x.move]));
+}
+
 async function computeSignals(client, rows, settings) {
   const ids = [...new Set(rows.map(r => r.competitor_id).filter(Boolean))];
   const players = new Map();
@@ -212,6 +229,8 @@ async function computeSignals(client, rows, settings) {
   const now = Date.now();
 
   const byTicker = new Map(rows.map(r => [r.ticker, r]));
+  const moves = await recentMoves(client, rows.map(r => r.ticker));
+  const todayPT = dayIn(new Date());
 
   /**
    * Decides whether a priced signal is safe to act on, and records why not.
@@ -237,23 +256,17 @@ async function computeSignals(client, rows, settings) {
        court, so an in-play quote is not something it can reason about. The lead
        time keeps out alerts that arrive too late to act on. */
     if (prematchOnly) {
-      /* A near-certain quote is itself evidence the match is under way or already
-         decided: those prices do not occur before a ball is struck. This matters
-         because `occurrence_datetime` is only a half-hour scheduling slot — ITF
-         start times slip — so the clock alone cannot be trusted to tell pre-match
-         from in-play. */
-      if (bid != null && (bid <= 2 || bid >= 97)) return 'price_implies_in_play';
+      /* Kalshi publishes no start time — `occurrence_datetime` is its expiry
+         estimate and ran 4h33m late on a checked match — so the pre-match test is
+         built from the ticker's match date plus what the book is doing, not from a
+         clock we do not have. */
+      const matchDay = matchDateFromTicker(s.ticker);   // plain YYYY-MM-DD
+      if (!matchDay) return 'no_match_date';
+      if (matchDay < todayPT) return 'match_day_passed';
+      if (matchDay > dayIn(new Date(now + maxAheadMs))) return 'too_far_ahead';
 
-      /* Only a time we can actually trust may clear the pre-match gate. A
-         midnight-UTC placeholder cannot show a match has not started, so those
-         markets are held back rather than alerted on a fabricated clock time. */
-      const sched = classifySchedule(m?.occurrence_datetime);
-      if (sched.confidence === 'none') return 'schedule_unreliable';
-
-      const startsAt = m?.occurrence_datetime ? new Date(m.occurrence_datetime).getTime() : null;
-      if (startsAt == null) return 'no_start_time';
-      if (startsAt - now < leadMs) return 'started_or_too_close';
-      if (startsAt - now > maxAheadMs) return 'too_far_ahead';
+      const inPlay = looksInPlay({ bid, ask, recentMoveCents: moves.get(s.ticker) });
+      if (inPlay) return inPlay;
     }
     return null;                                     // actionable
   };

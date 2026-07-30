@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { ChipBtn, StatusTag } from '../../common';
 import { usePoll } from '../../../hooks/useApi';
-import { api, fmtCountdown, fmtMatchTime, fmtNum, fmtPct, localZone } from '../../../lib/api';
+import { api, DESK_TZ, fmtMatchTime, fmtNum, fmtPct, localZone } from '../../../lib/api';
 import { PageHead } from '../PageHead';
 import { Empty, ErrorBox, Loading } from '../Notices';
 
-const FILTERS = [['all', 'All'], ['mispriced', 'Mispriced'], ['rated', 'Priced'], ['inplay', 'In play']];
+const FILTERS = [['all', 'All'], ['mispriced', 'Mispriced'], ['rated', 'Priced'], ['inplay', 'Past days']];
 const SORTS = [['edge', 'Edge'], ['starts', 'Start time'], ['ev', 'EV %']];
 
 /**
@@ -13,26 +13,32 @@ const SORTS = [['edge', 'Edge'], ['starts', 'Start time'], ['ev', 'EV %']];
  * than a first-serve time, so a match may begin later than shown — the countdown
  * turns amber close to the slot and red once it has passed.
  */
-function StartCell({ iso, confidence }) {
-  /* Kalshi stamps some markets 00:00Z — a date with no time. Rendering that in a
-     zone invents a convincing clock reading, so it is labelled instead. */
-  if (confidence === 'none') {
-    return (
-      <span className="text-muted2" title="Kalshi published no usable start time for this market">
-        time unknown
-      </span>
-    );
-  }
-  if (!iso) return <span className="text-muted2">—</span>;
-  const mins = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
-  const tone = mins <= 0 ? 'text-down' : mins <= 30 ? 'text-amber' : 'text-muted';
+/**
+ * Match day, plus Kalshi's expiry estimate clearly labelled as such.
+ *
+ * Kalshi publishes no start time: its `occurrence_datetime` is identical to
+ * `expected_expiration_time` and ran 4h33m past the real first serve on a checked
+ * match. So the day — which the ticker gets right — is shown as the fact, and the
+ * exchange's timestamp is shown only as an expiry estimate, never as a start.
+ */
+function StartCell({ matchDate, iso }) {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: DESK_TZ });
+  const day = matchDate ? String(matchDate).slice(0, 10) : null;
+  const label = !day ? 'date unknown'
+    : day === today ? 'Today'
+    : day < today ? 'Past'
+    : new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US',
+        { month: 'short', day: 'numeric', timeZone: 'UTC' });
+
   return (
-    <span title={new Date(iso).toString()}>
-      <span className="text-text">{fmtMatchTime(iso)}</span>
-      <span className={`block text-[10.5px] ${tone}`}>{fmtCountdown(iso)}</span>
-      {confidence === 'slot' && (
-        <span className="block text-[9.5px] text-muted2">±30m slot</span>
+    <span title={iso ? `Kalshi expiry estimate: ${new Date(iso).toString()}` : undefined}>
+      <span className={day && day < today ? 'text-down' : 'text-text'}>{label}</span>
+      {iso && (
+        <span className="block text-[9.5px] text-muted2">
+          est. settle {fmtMatchTime(iso)}
+        </span>
       )}
+      <span className="block text-[9.5px] text-amber/70">start time n/a</span>
     </span>
   );
 }
@@ -54,7 +60,7 @@ export default function Markets({ search, onTrade }) {
         title="Live markets"
         sub={count
           ? `${rows.length} shown · ${count.total} open ITF markets · ${count.priced} priced · `
-            + `times are scheduled slots in ${localZone()}`
+            + `${localZone()} — Kalshi publishes no start times, see note below`
           : 'Streaming from the Kalshi Trade API'}
         action={
           <div className="flex gap-2 items-center flex-wrap">
@@ -71,12 +77,21 @@ export default function Markets({ search, onTrade }) {
 
       {error && <ErrorBox error={error} />}
 
+      <div className="mb-5 rounded-card border border-line2 bg-panel p-4 text-[12.5px] text-muted">
+        <b className="text-text">Kalshi does not publish match start times.</b>{' '}
+        Its timestamp is an expiry estimate — on a checked ITF match it read 18:00 while play
+        actually began at 13:27. The match <i>day</i> comes from the ticker and is reliable; the clock
+        time is not shown as a start. Pre-match alerting therefore relies on the day plus the book
+        itself (an extreme or fast-moving quote means play has begun). Wiring a real schedule source
+        would give exact times.
+      </div>
+
       <div className="bg-panel border border-line rounded-card overflow-hidden mb-5.5">
         <div className="overflow-x-auto">
           <table className="tbl">
             <thead>
               <tr>
-                <th>Player / match</th><th>Starts</th><th>UTR</th><th>Δ</th><th>Fair</th>
+                <th>Player / match</th><th>Match day</th><th>UTR</th><th>Δ</th><th>Fair</th>
                 <th>Bid</th><th>Ask</th><th>Edge</th><th>EV</th><th>Vol</th><th>Status</th>
               </tr>
             </thead>
@@ -90,7 +105,7 @@ export default function Markets({ search, onTrade }) {
                     </div>
                   </td>
                   <td className="font-mono whitespace-nowrap">
-                    <StartCell iso={m.occurrence_datetime} confidence={m.schedule_confidence} />
+                    <StartCell matchDate={m.match_date} iso={m.occurrence_datetime} />
                   </td>
                   <td className="font-mono font-semibold">
                     {m.player_utr != null

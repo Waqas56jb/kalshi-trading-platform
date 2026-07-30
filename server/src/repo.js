@@ -26,7 +26,7 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
     `select m.ticker, m.event_ticker, m.series_ticker, m.player_name, m.status,
             m.yes_bid_cents, m.yes_ask_cents, m.last_price_cents,
             m.yes_ask_size, m.volume, m.volume_24h, m.open_interest, m.liquidity,
-            m.close_time, m.occurrence_datetime,
+            m.close_time, m.occurrence_datetime, m.match_date,
             e.matchup, e.tournament, e.round, e.tour_level,
             e.scheduled_at, e.schedule_confidence, e.schedule_source,
             s.fair_cents, s.ev_pct, s.utr_gap, s.player_utr, s.opponent_utr,
@@ -43,13 +43,20 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
                     or e.matchup ilike '%'||$1||'%'
                     or e.tournament ilike '%'||$1||'%'
                     or m.ticker ilike '%'||$1||'%')
+       /* Default view hides days that have already passed. Kalshi keeps a market
+          'active' for up to two weeks after the match while it waits to settle, so
+          without this the table filled with yesterday's finished matches. The match
+          day comes from the ticker, which is the only timing Kalshi gets right. */
        and case $2
              when 'mispriced' then coalesce(s.is_actionable, false)
              when 'rated'     then s.fair_cents is not null
-             when 'inplay'    then m.occurrence_datetime <= now()
+             when 'inplay'    then m.match_date < (now() at time zone 'America/Los_Angeles')::date
+             when 'all'       then coalesce(m.match_date, current_date)
+                                    >= (now() at time zone 'America/Los_Angeles')::date
              else true
            end
      order by
+       case when $4 = 'starts' then m.match_date end asc nulls last,
        case when $4 = 'starts' then m.occurrence_datetime end asc nulls last,
        case when $4 = 'edge'   then (s.fair_cents - s.market_cents) end desc nulls last,
        case when $4 = 'ev'     then s.ev_pct end desc nulls last,

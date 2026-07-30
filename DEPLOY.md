@@ -12,14 +12,28 @@ repo. Each has its own `vercel.json` and its own dependencies.
 Vercel picks up `server/vercel.json`. There is no build step — the project is
 serverless functions plus a small static page:
 
-- `server/api/[...slug].js` is a catch-all route, so every `/api/*` request
-  reaches the Express app with its original path intact. (A `rewrites` rule was
-  tried first and is wrong here: it hands Express the *rewritten* path, so
-  `/api/health` arrives as `/api/index` and 404s.)
+- A `"/api/:path*"` rewrite sends every `/api` request at any depth into
+  `server/api/index.js`. **Do not replace this with an `api/[...slug].js`
+  catch-all**: in a non-framework project that matches only one segment, so
+  `/api/health` works while `/api/alerts/12/dismiss` and
+  `/api/markets/:ticker/history` return a platform 404 without ever reaching the
+  function — silently breaking half the API in production only.
 - `outputDirectory` is `public`, which both satisfies Vercel's build check and
   keeps `src/` from being served as static files.
 - Routes are mounted at both `/api` and `/`, so the API answers regardless of
   whether the platform preserves the path.
+
+### Verify every depth, not just `/api/health`
+
+```bash
+B=https://<backend>.vercel.app
+curl -s -o /dev/null -w '%{http_code}\n' "$B/api/health"                      # 200
+curl -s -o /dev/null -w '%{http_code}\n' "$B/api/markets?limit=1"             # 200
+curl -s -o /dev/null -w '%{http_code}\n' "$B/api/markets/<ticker>/history"    # 200
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "$B/api/sync"                # 401
+```
+
+A single-segment check alone would have passed while nested routes were broken.
 
 ### Environment variables
 

@@ -10,7 +10,7 @@ const NAV = [
 ];
 
 export default function Sidebar({
-  open, page, onPage, onClose, onHome, onLogout, alertCount, botOn, onToggleBot, health,
+  open, page, onPage, onClose, onHome, onLogout, alertCount, botOn, onToggleBot, health, user,
 }) {
   const tracked = health?.sync?.markets_seen ?? null;
   const status = !botOn ? 'PAUSED · ALERTS ONLY'
@@ -51,6 +51,14 @@ export default function Sidebar({
         </nav>
 
         <div className="p-4 border-t border-line">
+          {user && (
+            <div className="mb-3 px-1">
+              <div className="text-[13px] font-semibold truncate">{user.name || user.email}</div>
+              <div className="font-mono text-[10.5px] text-muted2 truncate">
+                {user.role === 'admin' ? 'Administrator' : 'Trader'} · {user.email}
+              </div>
+            </div>
+          )}
           <div className="bg-panel border border-line2 rounded-[13px] p-3.5">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[13px] font-semibold">Trading bot</span>

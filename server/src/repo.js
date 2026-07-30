@@ -1,6 +1,20 @@
 import { t } from './config.js';
 import { query } from './db.js';
 
+/**
+ * Awaits an array of query thunks one at a time.
+ *
+ * Deliberately not Promise.all: the Supabase session pooler permits 15 clients
+ * across the whole project, and parallel fan-out inside a request that is itself
+ * fanned out exhausted it (EMAXCONNSESSION). One connection at a time per
+ * request is the safe shape.
+ */
+async function series(thunks) {
+  const out = [];
+  for (const fn of thunks) out.push(await fn());
+  return out;
+}
+
 /* ------------------------------------------------------------------ markets */
 
 /**
@@ -214,9 +228,17 @@ export async function evCapturedPerDay(days = 30) {
 
 /* --------------------------------------------------------------- dashboard */
 
+/**
+ * Runs its queries one after another rather than in parallel.
+ *
+ * Supabase's session pooler allows 15 clients in total. Fanning four queries out
+ * concurrently here, under a route that itself fans out, made a single dashboard
+ * load ask for eight connections and hit EMAXCONNSESSION. Sequential costs a
+ * little latency and cannot exhaust the pooler.
+ */
 export async function overviewStats() {
-  const [trades, snap, mkts, alerts] = await Promise.all([
-    query(
+  const [trades, snap, mkts, alerts] = await series([
+    () => query(
       `select
          coalesce(sum(pnl_usd) filter (where status = 'settled'), 0)::numeric as realised_pnl,
          coalesce(sum(pnl_usd) filter (where status = 'settled'
@@ -228,10 +250,10 @@ export async function overviewStats() {
          count(*) filter (where status = 'settled')::int as settled,
          count(*) filter (where result = 'won')::int as won
        from ${t('trades')}`),
-    query(`select balance_cents, open_positions from ${t('portfolio_snapshots')}
+    () => query(`select balance_cents, open_positions from ${t('portfolio_snapshots')}
            order by captured_at desc limit 1`),
-    marketCount(),
-    query(`select count(*)::int n from ${t('alerts')} where status = 'open'`),
+    () => marketCount(),
+    () => query(`select count(*)::int n from ${t('alerts')} where status = 'open'`),
   ]);
 
   const tr = trades.rows[0];
@@ -286,13 +308,13 @@ export async function updateSettings(patch) {
  * 0 markets" on every poll. The desk should show the last known good state.
  */
 export async function lastSync() {
-  const [settled, running] = await Promise.all([
-    query(
+  const [settled, running] = await series([
+    () => query(
       `select id, started_at, finished_at, status, markets_seen, signals_computed,
               alerts_created, latency_ms, error
        from ${t('sync_runs')} where finished_at is not null
        order by finished_at desc limit 1`),
-    query(
+    () => query(
       `select count(*)::int n from ${t('sync_runs')}
        where status = 'running' and started_at > now() - interval '5 minutes'`),
   ]);

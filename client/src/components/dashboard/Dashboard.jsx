@@ -12,7 +12,7 @@ import { usePoll } from '../../hooks/useApi';
 import { api } from '../../lib/api';
 import { useToast } from '../Toasts';
 
-export default function Dashboard({ onHome, onLogout }) {
+export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
   const toast = useToast();
   const [page, setPage] = useState('overview');
   const [sbOpen, setSbOpen] = useState(false);
@@ -92,14 +92,16 @@ export default function Dashboard({ onHome, onLogout }) {
         onHome={onHome} onLogout={onLogout}
         alertCount={openAlerts.length}
         botOn={botEnabled} onToggleBot={toggleBot}
-        health={h}
+        health={h} user={user}
       />
 
       <div className="flex-1 ml-[248px] flex flex-col min-w-0 max-[980px]:ml-0">
         <Topbar
-          query={query} onQuery={setQuery} health={h}
+          query={query} onQuery={setQuery} health={h} user={user}
+          alertCount={openAlerts.length}
           onBurger={() => setSbOpen(v => !v)}
           onAlerts={() => goPage('alerts')}
+          onAccount={() => goPage('settings')}
         />
 
         <div className="p-[clamp(16px,2.5vw,30px)] max-w-[1440px] w-full mx-auto">
@@ -115,7 +117,9 @@ export default function Dashboard({ onHome, onLogout }) {
           )}
           {page === 'trades' && <Trades />}
           {page === 'analytics' && <Analytics />}
-          {page === 'settings' && <Settings state={settings} />}
+          {page === 'settings' && (
+            <Settings state={settings} user={user} onUserChange={onUserChange} />
+          )}
         </div>
       </div>
 

@@ -1,7 +1,8 @@
 import { LiveDot } from '../common';
 import { IconBell, IconBurger, IconSearch } from '../Icons';
+import { initialsFor } from '../../lib/auth';
 
-export default function Topbar({ query, onQuery, onBurger, onAlerts, health }) {
+export default function Topbar({ query, onQuery, onBurger, onAlerts, health, user, alertCount, onAccount }) {
   const sync = health?.sync ?? null;
   const dbOk = health?.db?.ok ?? false;
   const latency = sync?.latency_ms ?? null;
@@ -50,17 +51,22 @@ export default function Topbar({ query, onQuery, onBurger, onAlerts, health }) {
           className="w-[38px] h-[38px] rounded-[11px] border border-line2 flex items-center justify-center
                      text-muted relative transition-all duration-250 hover:text-ace hover:border-ace"
           onClick={onAlerts}
-          aria-label="Alerts"
+          aria-label={alertCount ? `${alertCount} open alerts` : 'Alerts'}
         >
           <IconBell width="17" height="17" />
-          {(health?.sync?.alerts_created ?? 0) >= 0 && (
+          {alertCount > 0 && (
             <span className="absolute top-2 right-[9px] w-[7px] h-[7px] rounded-full bg-down border-2 border-bg" />
           )}
         </button>
-        <div className="w-[38px] h-[38px] rounded-full bg-[linear-gradient(135deg,var(--color-ace),#6BA82E)]
-                        flex items-center justify-center font-display font-extrabold text-sm text-[#0B0E03]">
-          MD
-        </div>
+        <button
+          onClick={onAccount}
+          title={user ? `${user.name || user.email} · ${user.role}` : undefined}
+          className="w-[38px] h-[38px] rounded-full bg-[linear-gradient(135deg,var(--color-ace),#6BA82E)]
+                     flex items-center justify-center font-display font-extrabold text-sm text-[#0B0E03]
+                     transition-transform duration-200 hover:scale-105"
+        >
+          {initialsFor(user)}
+        </button>
       </div>
     </div>
   );

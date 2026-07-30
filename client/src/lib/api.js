@@ -1,3 +1,5 @@
+import { clearSession, getToken } from './auth';
+
 /**
  * Backend client. Every number rendered in this app comes through here —
  * there is no local sample data anywhere in the frontend.
@@ -23,11 +25,16 @@ class ApiError extends Error {
 }
 
 async function call(method, path, body) {
+  const headers = {};
+  if (body) headers['Content-Type'] = 'application/json';
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
   let res;
   try {
     res = await fetch(BASE + path, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers,
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (e) {
@@ -44,6 +51,10 @@ async function call(method, path, body) {
   try { json = text ? JSON.parse(text) : null; } catch { /* keep raw */ }
 
   if (!res.ok) {
+    /* An expired or revoked token must end the session immediately rather than
+       leaving the dashboard polling a wall of 401s. The login endpoint is exempt:
+       a wrong password there is a form error, not a dead session. */
+    if (res.status === 401 && !path.startsWith('/api/auth/login')) clearSession();
     throw new ApiError(json?.message || json?.error || `${res.status} ${res.statusText}`, res.status, json);
   }
   return json;
@@ -59,6 +70,17 @@ const get = (p, q) => {
 export const api = {
   base: BASE,
   health: () => get('/api/health'),
+
+  /* ---- auth ---- */
+  login: (email, password) => call('POST', '/api/auth/login', { email, password }),
+  me: () => get('/api/auth/me'),
+  updateMe: patch => call('PATCH', '/api/auth/me', patch),
+
+  /* ---- accounts (admin) ---- */
+  users: () => get('/api/users'),
+  createUser: body => call('POST', '/api/users', body),
+  updateUser: (id, patch) => call('PATCH', `/api/users/${id}`, patch),
+  deleteUser: id => call('DELETE', `/api/users/${id}`),
 
   markets: q => get('/api/markets', q),
   priceHistory: (ticker, limit) => get(`/api/markets/${encodeURIComponent(ticker)}/history`, { limit }),

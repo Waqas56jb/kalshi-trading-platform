@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Panel, Tag } from '../../common';
+import { ChipBtn, Panel, Tag } from '../../common';
 import { api } from '../../../lib/api';
 import { useToast } from '../../Toasts';
 import { PageHead } from '../PageHead';
 import { ErrorBox, Loading } from '../Notices';
+import { MyAccountPanel, TeamPanel } from './AccountPanels';
 
 const TOGGLES = [
   ['manual_approval', 'Manual approval required', 'Every order needs your tap before it fires'],
@@ -18,11 +19,12 @@ const NUMBERS = [
   ['max_exposure_per_match', 'Max exposure per match (USD)', 50, 50],
 ];
 
-export default function Settings({ state }) {
+export default function Settings({ state, user, onUserChange }) {
   const toast = useToast();
   const saved = state.data?.settings ?? null;
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState('strategy');
 
   useEffect(() => { if (saved && !form) setForm(saved); }, [saved, form]);
 
@@ -53,18 +55,49 @@ export default function Settings({ state }) {
     }
   };
 
+  const isAdmin = user?.role === 'admin';
+
   return (
     <div className="animate-page-in">
       <PageHead
         title="Settings"
-        sub="Strategy, execution and connectivity"
-        action={
-          <button className="btn btn-ace btn-sm" onClick={save} disabled={saving || !dirty}>
+        sub={tab === 'strategy' ? 'Strategy, execution and connectivity' : 'Your account and desk access'}
+        action={tab === 'strategy' && (
+          <button className="btn btn-ace btn-sm" onClick={save} disabled={saving || !dirty || !isAdmin}>
             {saving ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}
           </button>
-        }
+        )}
       />
 
+      <div className="flex gap-2 mb-5.5">
+        <ChipBtn on={tab === 'strategy'} onClick={() => setTab('strategy')}>Strategy</ChipBtn>
+        <ChipBtn on={tab === 'account'} onClick={() => setTab('account')}>
+          {isAdmin ? 'Account & team' : 'My account'}
+        </ChipBtn>
+      </div>
+
+      {tab === 'account' && (
+        <>
+          <MyAccountPanel user={user} onUserChange={onUserChange} />
+          {isAdmin && <TeamPanel user={user} />}
+          {!isAdmin && (
+            <Panel title="Desk accounts">
+              <p className="text-[13px] text-muted">
+                Only administrators can add or remove accounts. Ask an administrator if you need
+                another sign-in created.
+              </p>
+            </Panel>
+          )}
+        </>
+      )}
+
+      {tab === 'strategy' && (
+      <>
+      {!isAdmin && (
+        <div className="mb-5 rounded-card border border-line2 bg-panel p-4 text-[13px] text-muted">
+          Strategy settings are read-only for traders — an administrator changes these.
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4 max-[980px]:grid-cols-1">
         <Panel title="Strategy">
           <div className="fld mb-4.5">
@@ -146,6 +179,8 @@ export default function Settings({ state }) {
           backend. This page cannot display or change them by design.
         </p>
       </Panel>
+      </>
+      )}
     </div>
   );
 }

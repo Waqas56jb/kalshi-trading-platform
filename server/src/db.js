@@ -16,7 +16,9 @@ const SERVERLESS = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION
 export const pool = new pg.Pool({
   connectionString: config.db.url,
   ssl: { rejectUnauthorized: false },
-  max: SERVERLESS ? 2 : 8,
+  /* Supabase's session pooler allows 15 clients across the whole project, shared
+     by every serverless container, local process and CLI run. Keep well under it. */
+  max: SERVERLESS ? 2 : 4,
   idleTimeoutMillis: SERVERLESS ? 5_000 : 10_000,
   connectionTimeoutMillis: SERVERLESS ? 12_000 : 30_000,
   keepAlive: true,

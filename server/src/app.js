@@ -7,6 +7,10 @@ import { runSync, reapStaleRuns } from './sync.js';
 import { checkKalshiAuth, executeAlert, getAuthState, reconcileTrades, snapshotPortfolio } from './orders.js';
 import * as repo from './repo.js';
 import { backfillRatings, ratingsCoverage } from './ratings.js';
+import {
+  authConfigured, authenticate, countAdmins, createUser, deleteUser, findUserByEmail,
+  getUser, listUsers, logAuthEvent, updateUser, verifyPassword, verifyToken,
+} from './auth.js';
 
 /**
  * The Express app, with no server attached.
@@ -50,17 +54,64 @@ export function createApp() {
     });
   });
 
-  /** Cron and other privileged endpoints require the shared secret when one is set. */
-  const requireCronAuth = (req, res) => {
+  /* ------------------------------------------------------------------ auth --- */
+
+  const bearer = req => {
+    const h = req.get('authorization') ?? '';
+    return h.startsWith('Bearer ') ? h.slice(7).trim() : null;
+  };
+
+  /** Attaches req.user when a valid session token is present. Never rejects. */
+  const readSession = (req, _res, next) => {
+    req.user = null;
+    const tok = bearer(req);
+    if (tok && authConfigured()) {
+      try {
+        const c = verifyToken(tok);
+        if (c) req.user = { id: Number(c.sub), email: c.email, role: c.role };
+      } catch { /* unconfigured or malformed — treated as anonymous */ }
+    }
+    next();
+  };
+
+  /** Gate for everything that reads desk data or moves money. */
+  const requireAuth = (req, res, next) => {
+    if (!authConfigured()) {
+      return res.status(503).json({
+        error: 'auth_not_configured',
+        message: 'AUTH_SECRET is not set on the server, so sessions cannot be verified.',
+      });
+    }
+    if (!req.user) {
+      return res.status(401).json({ error: 'unauthorized', message: 'Sign in to continue.' });
+    }
+    next();
+  };
+
+  const requireAdmin = (req, res, next) => {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'forbidden', message: 'Administrator access required.' });
+    }
+    next();
+  };
+
+  /**
+   * Cron endpoints accept the shared secret, a signed Vercel Cron invocation, or
+   * an authenticated admin pressing the button in the UI.
+   */
+  const requireCronOrAdmin = (req, res) => {
+    if (req.user?.role === 'admin') return true;
     const secret = process.env.CRON_SECRET;
-    if (!secret) return true;                                  // unset locally
-    const auth = req.get('authorization');
-    // Vercel Cron signs its own invocations with this header
-    const isVercelCron = req.get('x-vercel-signature') && req.get('user-agent')?.includes('vercel-cron');
-    if (auth === `Bearer ${secret}` || req.get('x-cron-secret') === secret || isVercelCron) return true;
-    res.status(401).json({ error: 'unauthorized', message: 'Valid cron secret required.' });
+    const isVercelCron = req.get('x-vercel-signature')
+      && /vercel-cron/i.test(req.get('user-agent') ?? '');
+    if (isVercelCron) return true;
+    if (secret && (bearer(req) === secret || req.get('x-cron-secret') === secret)) return true;
+    if (!secret && !authConfigured()) return true;             // unconfigured local dev
+    res.status(401).json({ error: 'unauthorized', message: 'Cron secret or admin session required.' });
     return false;
   };
+
+  api.use(readSession);
 
   /* ----------------------------------------------------------------- health */
 
@@ -74,13 +125,11 @@ export function createApp() {
 
     // each probe is independently guarded so one broken dependency still yields
     // a readable report rather than a 500
-    const settle = p => p.catch(e => ({ __error: e.message?.slice(0, 200) }));
-    const [db, auth, sync, ratings] = await Promise.all([
-      settle(ping().then(r => ({ ok: true, now: r.now }))),
-      settle(checkKalshiAuth(kalshi)),
-      settle(repo.lastSync()),
-      settle(ratingsCoverage()),
-    ]);
+    const settle = fn => fn().catch(e => ({ __error: e.message?.slice(0, 200) }));
+    const db = await settle(() => ping().then(r => ({ ok: true, now: r.now })));
+    const auth = await settle(() => checkKalshiAuth(kalshi));
+    const sync = await settle(() => repo.lastSync());
+    const ratings = await settle(() => ratingsCoverage());
 
     const dbOk = db?.ok === true;
     res.status(dbOk ? 200 : 503).json({
@@ -104,9 +153,119 @@ export function createApp() {
     });
   }));
 
+  /* ------------------------------------------------------------------ auth --- */
+
+  api.post('/auth/login', h(async (req, res) => {
+    if (!authConfigured()) {
+      return res.status(503).json({
+        error: 'auth_not_configured',
+        message: 'AUTH_SECRET is not set on the server, so sign-in is unavailable.',
+      });
+    }
+    const { email, password } = req.body ?? {};
+    if (!email || !password) {
+      return res.status(400).json({ error: 'missing_fields', message: 'Email and password are required.' });
+    }
+
+    const result = await authenticate(email, password, req);
+    if (!result) {
+      // deliberately identical whether the account is unknown or the password is wrong
+      return res.status(401).json({ error: 'invalid_credentials', message: 'Email or password is incorrect.' });
+    }
+    res.json(result);
+  }));
+
+  api.get('/auth/me', requireAuth, h(async (req, res) => {
+    const user = await getUser(req.user.id);
+    if (!user || !user.is_active) {
+      return res.status(401).json({ error: 'unauthorized', message: 'This account is no longer active.' });
+    }
+    res.json({ user });
+  }));
+
+  /** Change your own email, name or password. Current password is required. */
+  api.patch('/auth/me', requireAuth, h(async (req, res) => {
+    const { currentPassword, email, name, password } = req.body ?? {};
+    const row = await findUserByEmail(req.user.email);
+    if (!row) return res.status(401).json({ error: 'unauthorized', message: 'Account not found.' });
+
+    if ((email !== undefined || password !== undefined)) {
+      if (!currentPassword || !(await verifyPassword(currentPassword, row.password_hash))) {
+        return res.status(403).json({
+          error: 'bad_current_password',
+          message: 'Enter your current password to change your email or password.',
+        });
+      }
+    }
+
+    const user = await updateUser(req.user.id, { email, name, password });
+    await logAuthEvent({
+      userId: req.user.id, email: user.email, event: 'updated',
+      detail: [email && 'email', password && 'password', name !== undefined && 'name']
+        .filter(Boolean).join(','),
+      req,
+    });
+    res.json({ user });
+  }));
+
+  /* ----------------------------------------------------------------- users --- */
+
+  api.get('/users', requireAuth, requireAdmin, h(async (_req, res) => {
+    res.json({ users: await listUsers() });
+  }));
+
+  api.post('/users', requireAuth, requireAdmin, h(async (req, res) => {
+    const { email, password, name, role } = req.body ?? {};
+    const user = await createUser({ email, password, name, role });
+    await logAuthEvent({
+      userId: user.id, email: user.email, event: 'created',
+      detail: `by ${req.user.email}`, req,
+    });
+    res.status(201).json({ user });
+  }));
+
+  api.patch('/users/:id', requireAuth, requireAdmin, h(async (req, res) => {
+    const id = Number(req.params.id);
+    const { email, password, name, role, is_active } = req.body ?? {};
+
+    // never let the last active admin lock everyone out
+    if ((role && role !== 'admin') || is_active === false) {
+      const target = await getUser(id);
+      if (target?.role === 'admin' && await countAdmins(id) === 0) {
+        return res.status(409).json({
+          error: 'last_admin',
+          message: 'This is the only active administrator. Promote another account first.',
+        });
+      }
+    }
+
+    const user = await updateUser(id, { email, password, name, role, is_active });
+    if (!user) return res.status(404).json({ error: 'not_found', message: 'No such account.' });
+    await logAuthEvent({ userId: id, email: user.email, event: 'updated', detail: `by ${req.user.email}`, req });
+    res.json({ user });
+  }));
+
+  api.delete('/users/:id', requireAuth, requireAdmin, h(async (req, res) => {
+    const id = Number(req.params.id);
+    if (id === req.user.id) {
+      return res.status(409).json({ error: 'self_delete', message: 'You cannot delete your own account.' });
+    }
+    const target = await getUser(id);
+    if (target?.role === 'admin' && await countAdmins(id) === 0) {
+      return res.status(409).json({
+        error: 'last_admin', message: 'This is the only active administrator.',
+      });
+    }
+    if (!(await deleteUser(id))) {
+      return res.status(404).json({ error: 'not_found', message: 'No such account.' });
+    }
+    await logAuthEvent({ email: target?.email, event: 'deleted', detail: `by ${req.user.email}`, req });
+    res.json({ deleted: id });
+  }));
+
   /* ---------------------------------------------------------------- markets */
 
-  api.get('/markets', h(async (req, res) => {
+  api.get('/markets', requireAuth, h(async (req, res) => {
     const rows = await repo.listMarkets({
       filter: String(req.query.filter ?? 'all'),
       search: String(req.query.search ?? ''),
@@ -115,7 +274,7 @@ export function createApp() {
     res.json({ markets: rows, count: await repo.marketCount() });
   }));
 
-  api.get('/markets/:ticker/history', h(async (req, res) => {
+  api.get('/markets/:ticker/history', requireAuth, h(async (req, res) => {
     res.json({
       history: await repo.priceHistory(req.params.ticker, Math.min(Number(req.query.limit) || 200, 1000)),
     });
@@ -123,21 +282,21 @@ export function createApp() {
 
   /* ----------------------------------------------------------------- alerts */
 
-  api.get('/alerts', h(async (req, res) => {
+  api.get('/alerts', requireAuth, h(async (req, res) => {
     res.json({ alerts: await repo.listAlerts({ status: String(req.query.status ?? 'open') }) });
   }));
 
-  api.post('/alerts/:id/dismiss', h(async (req, res) => {
+  api.post('/alerts/:id/dismiss', requireAuth, h(async (req, res) => {
     const a = await repo.resolveAlert(Number(req.params.id), 'dismissed');
     if (!a) return res.status(404).json({ error: 'not_found', message: 'Alert is not open.' });
     res.json({ alert: a });
   }));
 
-  api.post('/alerts/dismiss-all', h(async (_req, res) => {
+  api.post('/alerts/dismiss-all', requireAuth, h(async (_req, res) => {
     res.json({ dismissed: await repo.dismissAllAlerts() });
   }));
 
-  api.post('/alerts/:id/execute', h(async (req, res) => {
+  api.post('/alerts/:id/execute', requireAuth, h(async (req, res) => {
     const out = await executeAlert(kalshi, Number(req.params.id), {
       sizeOverride: req.body?.contracts ? Number(req.body.contracts) : undefined,
     });
@@ -146,41 +305,41 @@ export function createApp() {
 
   /* ----------------------------------------------------------------- trades */
 
-  api.get('/trades', h(async (req, res) => {
+  api.get('/trades', requireAuth, h(async (req, res) => {
     res.json({ trades: await repo.listTrades({ filter: String(req.query.filter ?? 'all') }) });
   }));
 
   /* -------------------------------------------------------------- dashboard */
 
-  api.get('/overview', h(async (req, res) => {
-    const [stats, pnl, alerts, sync] = await Promise.all([
-      repo.overviewStats(),
-      repo.pnlSeries(Math.min(Number(req.query.days) || 30, 90)),
-      repo.listAlerts({ status: 'open', limit: 4 }),
-      repo.lastSync(),
-    ]);
+  api.get('/overview', requireAuth, h(async (req, res) => {
+    const days = Math.min(Number(req.query.days) || 30, 90);
+    const stats = await repo.overviewStats();
+    const pnl = await repo.pnlSeries(days);
+    const alerts = await repo.listAlerts({ status: 'open', limit: 4 });
+    const sync = await repo.lastSync();
     res.json({ stats, pnl, alerts, sync, kalshi: getAuthState() });
   }));
 
-  api.get('/analytics', h(async (req, res) => {
+  api.get('/analytics', requireAuth, h(async (req, res) => {
     const days = Math.min(Number(req.query.days) || 30, 90);
-    const [buckets, wr, ev, pnl] = await Promise.all([
-      repo.pnlByGapBucket(), repo.winRate(), repo.evCapturedPerDay(days), repo.pnlSeries(days),
-    ]);
+    const buckets = await repo.pnlByGapBucket();
+    const wr = await repo.winRate();
+    const ev = await repo.evCapturedPerDay(days);
+    const pnl = await repo.pnlSeries(days);
     res.json({ buckets, winRate: wr, evPerDay: ev, pnl });
   }));
 
-  api.get('/pnl', h(async (req, res) => {
+  api.get('/pnl', requireAuth, h(async (req, res) => {
     res.json({ pnl: await repo.pnlSeries(Math.min(Number(req.query.days) || 30, 90)) });
   }));
 
   /* --------------------------------------------------------------- settings */
 
-  api.get('/settings', h(async (_req, res) => {
+  api.get('/settings', requireAuth, h(async (_req, res) => {
     res.json({ settings: await repo.getSettings() });
   }));
 
-  api.patch('/settings', h(async (req, res) => {
+  api.patch('/settings', requireAuth, requireAdmin, h(async (req, res) => {
     res.json({ settings: await repo.updateSettings(req.body ?? {}) });
   }));
 
@@ -192,26 +351,26 @@ export function createApp() {
    * Kalshi API by anyone who finds the URL.
    */
   api.all('/sync', h(async (req, res) => {
-    if (!requireCronAuth(req, res)) return;
+    if (!requireCronOrAdmin(req, res)) return;
     await reapStaleRuns().catch(() => {});
     res.json(await runSync(kalshi, { verbose: true }));
   }));
 
   /** Imports UTR ratings for newly discovered competitors. Cron-driven. */
   api.all('/ratings/backfill', h(async (req, res) => {
-    if (!requireCronAuth(req, res)) return;
+    if (!requireCronOrAdmin(req, res)) return;
     const limit = Math.min(Number(req.query.limit) || 40, 120);
     const stats = await backfillRatings({ limit, delayMs: 220 });
     res.json({ ...stats, coverage: await ratingsCoverage() });
   }));
 
   api.all('/portfolio/snapshot', h(async (req, res) => {
-    if (req.method !== 'GET' && !requireCronAuth(req, res)) return;
+    if (req.method !== 'GET' && !requireCronOrAdmin(req, res)) return;
     res.json({ snapshot: await snapshotPortfolio(kalshi), kalshi: getAuthState() });
   }));
 
   api.all('/trades/reconcile', h(async (req, res) => {
-    if (!requireCronAuth(req, res)) return;
+    if (!requireCronOrAdmin(req, res)) return;
     res.json(await reconcileTrades(kalshi));
   }));
 

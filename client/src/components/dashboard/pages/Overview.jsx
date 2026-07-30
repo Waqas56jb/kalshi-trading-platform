@@ -22,6 +22,8 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
   const pnl = data?.pnl ?? [];
   const tradingLive = health?.kalshi?.trading === 'ok';
   const paper = settings?.paper_trading ?? true;
+  const balanceAgeMins = s?.balance_at
+    ? Math.round((Date.now() - new Date(s.balance_at).getTime()) / 60000) : null;
   const isAdmin = user?.role === 'admin';
 
   const pnlRef = useCanvas(c => {
@@ -75,7 +77,7 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
         <StatCard
           label="Markets priced"
           value={s ? `${fmtNum(s.markets.priced)}` : '—'}
-          delta={s ? `of ${fmtNum(s.markets.total)} live ITF markets` : '—'}
+          delta={s ? `of ${fmtNum(s.markets.total)} open ITF markets` : '—'}
           deltaClass="text-muted"
         />
         <StatCard
@@ -127,8 +129,15 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
         <StatCard
           label="Kalshi balance"
           value={s?.balance_cents != null ? fmtUsd(s.balance_cents / 100) : '—'}
-          delta={s?.balance_cents != null ? 'live from Kalshi' : 'needs working API credentials'}
-          deltaClass={s?.balance_cents != null ? 'text-up' : 'text-muted2'}
+          /* Never call this "live": it is the last snapshot, refreshed on sync.
+             It once sat six hours stale showing $2,979 against a real $39. */
+          delta={s?.balance_cents == null ? 'needs working API credentials'
+            : balanceAgeMins == null ? 'from Kalshi'
+            : balanceAgeMins < 2 ? 'just now'
+            : balanceAgeMins < 60 ? `as of ${balanceAgeMins}m ago`
+            : `as of ${Math.round(balanceAgeMins / 60)}h ago — run a sync`}
+          deltaClass={s?.balance_cents == null ? 'text-muted2'
+            : balanceAgeMins != null && balanceAgeMins > 60 ? 'text-amber' : 'text-muted'}
         />
       </div>
 

@@ -1,5 +1,6 @@
 import { config, t } from './config.js';
 import { syncSchedule } from './schedule.js';
+import { snapshotPortfolio } from './orders.js';
 import { query, tx } from './db.js';
 import {
   buildSignalsForEvent, classifySchedule, dayIn, dollarsToCents, looksInPlay,
@@ -348,6 +349,25 @@ async function computeSignals(client, rows, settings) {
 }
 
 /** Opens alerts for newly actionable signals; expires ones that no longer qualify. */
+/**
+ * Marks markets that dropped out of the feed as closed.
+ *
+ * The sync asks Kalshi only for open markets, so a ticker that stops appearing
+ * has closed. Without this their status stayed 'active' forever and the desk
+ * counted 482 "live ITF markets" when Kalshi was returning 96.
+ */
+async function markUnseenClosed(client, rows) {
+  const r = await client.query(
+    `update ${t('markets')} set status = 'closed', updated_at = now()
+     where status in ('active','open','initialized')
+       and ticker <> all($1::text[])
+       and updated_at < now() - interval '30 minutes'
+     returning ticker`,
+    [rows.map(x => x.ticker)],
+  );
+  return r.rowCount ?? 0;
+}
+
 /** Persists the inferred play state so the desk can label each market. */
 async function recordPlayState(client, rows, settings) {
   if (!rows.length) return 0;
@@ -466,9 +486,14 @@ export async function runSync(kalshi, { verbose = false } = {}) {
       const ticks = await recordPriceHistory(client, rows);
       const sig = await computeSignals(client, rows, settings);
       await recordPlayState(client, rows, settings);
+      await markUnseenClosed(client, rows);
       const alerts = await reconcileAlerts(client, settings);
       return { events, upserted, ticks, ...sig, ...alerts };
     });
+
+    /* Refresh the balance so the dashboard is not quoting a stale snapshot. It
+       was showing a six-hour-old $2,979 while the account actually held $39. */
+    await snapshotPortfolio(kalshi).catch(() => null);
 
     const latency = Date.now() - t0;
     await query(

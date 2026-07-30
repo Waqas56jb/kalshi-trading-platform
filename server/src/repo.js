@@ -353,7 +353,7 @@ export async function overviewStats() {
          count(*) filter (where status = 'settled')::int as settled,
          count(*) filter (where result = 'won')::int as won
        from ${t('trades')}`),
-    () => query(`select balance_cents, open_positions from ${t('portfolio_snapshots')}
+    () => query(`select balance_cents, open_positions, captured_at from ${t('portfolio_snapshots')}
            order by captured_at desc limit 1`),
     () => marketCount(),
     () => query(`select count(*)::int n from ${t('alerts')} where status = 'open'`),
@@ -376,6 +376,7 @@ export async function overviewStats() {
   const settled = tr.settled;
   return {
     balance_cents: snap.rows[0]?.balance_cents ?? null,
+    balance_at: snap.rows[0]?.captured_at ?? null,
     realised_pnl: Number(tr.realised_pnl),
     pnl_7d: Number(tr.pnl_7d),
     pnl_today: Number(tr.pnl_today),

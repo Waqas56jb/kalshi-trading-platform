@@ -5,7 +5,7 @@ import { ping } from './db.js';
 import { clientFromEnv } from './kalshi.js';
 import { runSync, reapStaleRuns } from './sync.js';
 import {
-  autoSellAtFair, checkKalshiAuth, closePosition, executeAlert, getAuthState,
+  autoSellAtFair, checkKalshiAuth, closePosition, executeAlert, getAuthState, livePositions,
   reconcileTrades, snapshotPortfolio,
 } from './orders.js';
 import { probe as probeSchedule, syncSchedule } from './schedule.js';
@@ -333,6 +333,11 @@ export function createApp() {
   api.all('/schedule/sync', h(async (req, res) => {
     if (!requireCronOrAdmin(req, res)) return;
     res.json(await syncSchedule({ date: req.query.date }));
+  }));
+
+  /** The client's real Kalshi positions, straight from the exchange. */
+  api.get('/portfolio/positions', requireAuth, h(async (_req, res) => {
+    res.json(await livePositions(kalshi));
   }));
 
   api.get('/trades', requireAuth, h(async (req, res) => {

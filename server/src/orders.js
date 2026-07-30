@@ -45,25 +45,56 @@ export async function checkKalshiAuth(kalshi, { force = false } = {}) {
 export const getAuthState = () => authState;
 
 /** Records a balance/exposure snapshot. No-op when credentials don't work. */
+/**
+ * Reads the client's real Kalshi positions.
+ *
+ * The portfolio API returns money as decimal dollar strings and sizes with an
+ * `_fp` suffix — `position_fp`, `market_exposure_dollars`, `realized_pnl_dollars`
+ * — exactly like the market endpoints. Reading the unsuffixed names silently
+ * yields undefined, which is why the desk reported no positions while the account
+ * held $106 of them.
+ */
+export async function livePositions(kalshi) {
+  const st = await checkKalshiAuth(kalshi);
+  if (!st.ok) return { ok: false, error: st.error, positions: [] };
+
+  const pos = await kalshi.getPositions({ limit: 200 }).catch(() => null);
+  const rows = (pos?.market_positions ?? []).map(p => ({
+    ticker: p.ticker,
+    contracts: Number(p.position_fp ?? 0),
+    exposure_usd: Number(p.market_exposure_dollars ?? 0),
+    realised_usd: Number(p.realized_pnl_dollars ?? 0),
+    fees_usd: Number(p.fees_paid_dollars ?? 0),
+    traded_usd: Number(p.total_traded_dollars ?? 0),
+    updated_at: p.last_updated_ts ?? null,
+  }));
+
+  const open = rows.filter(r => r.contracts !== 0);
+  return {
+    ok: true,
+    positions: open,
+    closed: rows.filter(r => r.contracts === 0 && r.realised_usd !== 0),
+    exposure_usd: +open.reduce((s, r) => s + Math.abs(r.exposure_usd), 0).toFixed(2),
+    realised_usd: +rows.reduce((s, r) => s + r.realised_usd, 0).toFixed(2),
+    fees_usd: +rows.reduce((s, r) => s + r.fees_usd, 0).toFixed(2),
+  };
+}
+
 export async function snapshotPortfolio(kalshi) {
   const st = await checkKalshiAuth(kalshi);
   if (!st.ok) return null;
 
-  const [bal, pos] = await Promise.all([
-    kalshi.getBalance().catch(() => null),
-    kalshi.getPositions({ settlement_status: 'unsettled' }).catch(() => null),
-  ]);
-
-  const positions = pos?.market_positions ?? [];
-  const exposure = positions.reduce((s, p) => s + Math.abs(Number(p.market_exposure ?? 0)), 0);
+  const bal = await kalshi.getBalance().catch(() => null);
+  const live = await livePositions(kalshi);
 
   const r = await query(
     `insert into ${t('portfolio_snapshots')}
        (balance_cents, exposure_cents, realized_pnl_cents, open_positions)
      values ($1,$2,$3,$4) returning *`,
-    [bal?.balance ?? null, Math.round(exposure) || null,
-      positions.reduce((s, p) => s + Number(p.realized_pnl ?? 0), 0) || null,
-      positions.filter(p => Number(p.position ?? 0) !== 0).length],
+    [bal?.balance ?? null,
+      Math.round((live.exposure_usd ?? 0) * 100) || null,
+      Math.round((live.realised_usd ?? 0) * 100) || null,
+      live.positions?.length ?? 0],
   );
   return r.rows[0];
 }

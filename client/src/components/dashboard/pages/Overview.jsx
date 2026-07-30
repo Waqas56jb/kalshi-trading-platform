@@ -106,7 +106,7 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
       {/* position + P&L metrics — need trades before they mean anything */}
       <div className="grid grid-cols-4 gap-4 mb-5.5 max-[1180px]:grid-cols-2 max-[420px]:grid-cols-1">
         <StatCard
-          label={paper ? 'Paper P&L (today)' : "Today's realised P&L"}
+          label={paper ? 'Desk paper P&L (today)' : "Desk realised P&L (today)"}
           value={s ? fmtUsd(s.pnl_today, { sign: true }) : '—'}
           valueClass={s?.pnl_today > 0 ? 'text-up' : s?.pnl_today < 0 ? 'text-down' : ''}
           delta={s ? `${fmtUsd(s.pnl_7d, { sign: true })} over 7 days` : '—'}
@@ -114,17 +114,19 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
           badge={paper ? 'PAPER' : null}
         />
         <StatCard
-          label="Open positions"
-          value={s ? fmtNum(s.open_positions) : '—'}
-          delta={s ? `${fmtUsd(s.at_risk)} at risk` : '—'}
+          label="Kalshi positions"
+          value={s?.kalshi_open_positions != null ? fmtNum(s.kalshi_open_positions) : '—'}
+          delta={s?.kalshi_exposure_cents != null
+            ? `${fmtUsd(s.kalshi_exposure_cents / 100)} exposure`
+            : 'needs a portfolio sync'}
           deltaClass="text-muted"
-          badge={paper && s?.open_positions ? 'PAPER' : null}
         />
         <StatCard
-          label="Hit rate"
-          value={s?.hit_rate != null ? `${s.hit_rate}%` : '—'}
-          delta={s ? (s.settled ? `${s.won} of ${s.settled} settled` : 'awaiting first settlement') : '—'}
-          deltaClass={s?.settled ? 'text-up' : 'text-muted2'}
+          label="Kalshi realised P&L"
+          value={s?.kalshi_realised_cents != null ? fmtUsd(s.kalshi_realised_cents / 100, { sign: true }) : '—'}
+          valueClass={s?.kalshi_realised_cents > 0 ? 'text-up' : s?.kalshi_realised_cents < 0 ? 'text-down' : ''}
+          delta="whole account, from Kalshi"
+          deltaClass="text-muted"
         />
         <StatCard
           label="Kalshi balance"

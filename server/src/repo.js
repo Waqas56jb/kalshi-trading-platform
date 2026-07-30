@@ -377,6 +377,11 @@ export async function overviewStats() {
   return {
     balance_cents: snap.rows[0]?.balance_cents ?? null,
     balance_at: snap.rows[0]?.captured_at ?? null,
+    /* From the exchange, not our ledger: the client trades this account
+       outside the desk too, so these are the figures that actually matter. */
+    kalshi_exposure_cents: snap.rows[0]?.exposure_cents ?? null,
+    kalshi_realised_cents: snap.rows[0]?.realized_pnl_cents ?? null,
+    kalshi_open_positions: snap.rows[0]?.open_positions ?? null,
     realised_pnl: Number(tr.realised_pnl),
     pnl_7d: Number(tr.pnl_7d),
     pnl_today: Number(tr.pnl_today),

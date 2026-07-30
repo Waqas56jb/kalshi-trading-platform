@@ -127,10 +127,24 @@ export const fmtNum = n => (n == null ? '—' : Number(n).toLocaleString(undefin
 export const fmtTime = iso => {
   if (!iso) return '—';
   const d = new Date(iso);
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString('en-US', {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: DESK_TZ,
+  });
 };
 
-const clock = d => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+/**
+ * Every timestamp on the desk renders in one fixed zone, not the viewer's.
+ *
+ * The trader compares against Sofascore and the ITF site in Pacific, so showing
+ * the browser's zone made the same match appear at two different times.
+ */
+export const DESK_TZ = 'America/Los_Angeles';
+
+const clock = d => d.toLocaleTimeString('en-US',
+  { hour: '2-digit', minute: '2-digit', timeZone: DESK_TZ });
+
+/** Calendar day in the desk's zone, for "today / tomorrow" comparisons. */
+const deskDay = d => d.toLocaleDateString('en-CA', { timeZone: DESK_TZ });
 
 /**
  * Scheduled start, in the viewer's own timezone, with the day made explicit so
@@ -144,14 +158,21 @@ export const fmtMatchTime = iso => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
 
-  const today = new Date();
-  const midnight = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const dayDiff = Math.round((midnight(d) - midnight(today)) / 86_400_000);
+  const dayDiff = Math.round(
+    (Date.parse(deskDay(d)) - Date.parse(deskDay(new Date()))) / 86_400_000);
 
   if (dayDiff === 0) return clock(d);
   if (dayDiff === 1) return `Tomorrow ${clock(d)}`;
   if (dayDiff === -1) return `Yesterday ${clock(d)}`;
-  return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${clock(d)}`;
+  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: DESK_TZ })} ${clock(d)}`;
+};
+
+/** Short zone label, e.g. "PDT". */
+export const deskZoneLabel = () => {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: DESK_TZ, timeZoneName: 'short' })
+      .formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value ?? 'PT';
+  } catch { return 'PT'; }
 };
 
 /** Compact "in 3h 21m" / "started" for the same timestamp. */
@@ -166,11 +187,5 @@ export const fmtCountdown = iso => {
   return `in ${Math.floor(h / 24)}d ${h % 24}h`;
 };
 
-/** The viewer's timezone label, so the times on screen are unambiguous. */
-export const localZone = () => {
-  try {
-    return new Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'local time';
-  } catch {
-    return 'local time';
-  }
-};
+/** Retained name; always the desk zone now, never the viewer's. */
+export const localZone = () => `${DESK_TZ.split('/')[1].replace('_', ' ')} (${deskZoneLabel()})`;

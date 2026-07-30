@@ -140,3 +140,23 @@ export function buildSignalsForEvent(markets, players) {
     };
   });
 }
+
+/**
+ * Classifies a Kalshi `occurrence_datetime`.
+ *
+ * It is not a start time. Across a live sample of 454 markets there were 29
+ * distinct values, every one on a :00 or :30 grid, and a number sitting at
+ * exactly 00:00Z — a date with no time in it. Rendering such a value in a local
+ * zone produces a convincing but invented clock time, so it is labelled instead.
+ */
+export function classifySchedule(occurrenceIso) {
+  if (!occurrenceIso) return { confidence: 'none', source: 'kalshi_missing' };
+  const d = new Date(occurrenceIso);
+  if (Number.isNaN(d.getTime())) return { confidence: 'none', source: 'kalshi_invalid' };
+
+  // exactly midnight UTC == "some time that day", not a schedule
+  if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
+    return { confidence: 'none', source: 'kalshi_placeholder' };
+  }
+  return { confidence: 'slot', source: 'kalshi_slot' };
+}

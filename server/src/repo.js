@@ -28,6 +28,7 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
             m.yes_ask_size, m.volume, m.volume_24h, m.open_interest, m.liquidity,
             m.close_time, m.occurrence_datetime,
             e.matchup, e.tournament, e.round, e.tour_level,
+            e.scheduled_at, e.schedule_confidence, e.schedule_source,
             s.fair_cents, s.ev_pct, s.utr_gap, s.player_utr, s.opponent_utr,
             s.opponent_name, s.is_actionable,
             -- absolute edge in cents. Percentage EV explodes on cheap contracts
@@ -115,6 +116,7 @@ export async function listAlerts({ status = 'open', limit = 50 } = {}) {
 
   const r = await query(
     `select a.*, m.yes_ask_size, m.volume, e.round, e.tour_level,
+            e.scheduled_at, e.schedule_confidence,
             m.occurrence_datetime as market_starts_at,
             (a.fair_cents - a.market_cents) as edge_cents,
             (m.yes_ask_cents - m.yes_bid_cents) as spread_cents,
@@ -445,6 +447,7 @@ const SETTABLE = new Set([
   'inplay_enabled', 'bot_enabled', 'paper_trading',
   'min_bid_cents', 'max_spread_cents', 'max_edge_cents',
   'prematch_only', 'alert_lead_minutes', 'alert_max_hours', 'sound_enabled',
+  'display_timezone', 'odds_divergence_cents', 'odds_alerts_enabled',
 ]);
 
 export async function updateSettings(patch) {

@@ -13,7 +13,16 @@ const SORTS = [['edge', 'Edge'], ['starts', 'Start time'], ['ev', 'EV %']];
  * than a first-serve time, so a match may begin later than shown — the countdown
  * turns amber close to the slot and red once it has passed.
  */
-function StartCell({ iso }) {
+function StartCell({ iso, confidence }) {
+  /* Kalshi stamps some markets 00:00Z — a date with no time. Rendering that in a
+     zone invents a convincing clock reading, so it is labelled instead. */
+  if (confidence === 'none') {
+    return (
+      <span className="text-muted2" title="Kalshi published no usable start time for this market">
+        time unknown
+      </span>
+    );
+  }
   if (!iso) return <span className="text-muted2">—</span>;
   const mins = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
   const tone = mins <= 0 ? 'text-down' : mins <= 30 ? 'text-amber' : 'text-muted';
@@ -21,6 +30,9 @@ function StartCell({ iso }) {
     <span title={new Date(iso).toString()}>
       <span className="text-text">{fmtMatchTime(iso)}</span>
       <span className={`block text-[10.5px] ${tone}`}>{fmtCountdown(iso)}</span>
+      {confidence === 'slot' && (
+        <span className="block text-[9.5px] text-muted2">±30m slot</span>
+      )}
     </span>
   );
 }
@@ -78,7 +90,7 @@ export default function Markets({ search, onTrade }) {
                     </div>
                   </td>
                   <td className="font-mono whitespace-nowrap">
-                    <StartCell iso={m.occurrence_datetime} />
+                    <StartCell iso={m.occurrence_datetime} confidence={m.schedule_confidence} />
                   </td>
                   <td className="font-mono font-semibold">
                     {m.player_utr != null

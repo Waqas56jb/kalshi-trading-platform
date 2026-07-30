@@ -1,7 +1,7 @@
 import { config, t } from './config.js';
 import { query, tx } from './db.js';
 import {
-  buildSignalsForEvent, dollarsToCents, parseMarketTitle, toNum,
+  buildSignalsForEvent, classifySchedule, dollarsToCents, parseMarketTitle, toNum,
 } from './model.js';
 
 /** Normalises one raw Kalshi market row into our column shape. */
@@ -63,16 +63,25 @@ async function upsertEvents(client, rows) {
   await client.query(
     `insert into ${t('events')}
        (event_ticker, series_ticker, title, matchup, tournament, round, tour_level,
-        occurrence_datetime, close_time, status, raw)
+        occurrence_datetime, close_time, status, raw,
+        scheduled_at, schedule_source, schedule_confidence)
      select * from unnest(
        $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[],
-       $8::timestamptz[], $9::timestamptz[], $10::text[], $11::jsonb[])
+       $8::timestamptz[], $9::timestamptz[], $10::text[], $11::jsonb[],
+       $12::timestamptz[], $13::text[], $14::text[])
      on conflict (event_ticker) do update set
        title = excluded.title, matchup = excluded.matchup,
        tournament = excluded.tournament, round = excluded.round,
        tour_level = excluded.tour_level,
        occurrence_datetime = excluded.occurrence_datetime,
-       close_time = excluded.close_time, status = excluded.status`,
+       close_time = excluded.close_time, status = excluded.status,
+       -- never downgrade a time that came from a real schedule source
+       scheduled_at = case when public.kalshi_events.schedule_confidence = 'exact'
+                          then public.kalshi_events.scheduled_at else excluded.scheduled_at end,
+       schedule_source = case when public.kalshi_events.schedule_confidence = 'exact'
+                          then public.kalshi_events.schedule_source else excluded.schedule_source end,
+       schedule_confidence = case when public.kalshi_events.schedule_confidence = 'exact'
+                          then 'exact' else excluded.schedule_confidence end`,
     [
       list.map(r => r.event_ticker),
       list.map(r => r.series_ticker),
@@ -85,6 +94,10 @@ async function upsertEvents(client, rows) {
       list.map(r => r.close_time),
       list.map(r => r.status),
       list.map(r => JSON.stringify({ event_ticker: r.event_ticker, series: r.series_ticker })),
+      list.map(r => (classifySchedule(r.occurrence_datetime).confidence === 'none'
+        ? null : r.occurrence_datetime)),
+      list.map(r => classifySchedule(r.occurrence_datetime).source),
+      list.map(r => classifySchedule(r.occurrence_datetime).confidence),
     ],
   );
   return list.length;
@@ -230,6 +243,12 @@ async function computeSignals(client, rows, settings) {
          start times slip — so the clock alone cannot be trusted to tell pre-match
          from in-play. */
       if (bid != null && (bid <= 2 || bid >= 97)) return 'price_implies_in_play';
+
+      /* Only a time we can actually trust may clear the pre-match gate. A
+         midnight-UTC placeholder cannot show a match has not started, so those
+         markets are held back rather than alerted on a fabricated clock time. */
+      const sched = classifySchedule(m?.occurrence_datetime);
+      if (sched.confidence === 'none') return 'schedule_unreliable';
 
       const startsAt = m?.occurrence_datetime ? new Date(m.occurrence_datetime).getTime() : null;
       if (startsAt == null) return 'no_start_time';

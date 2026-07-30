@@ -1,6 +1,7 @@
 import { config, t } from './config.js';
 import { syncSchedule } from './schedule.js';
 import { snapshotPortfolio } from './orders.js';
+import { importKalshiHistory } from './importer.js';
 import { query, tx } from './db.js';
 import {
   buildSignalsForEvent, classifySchedule, dayIn, dollarsToCents, looksInPlay,
@@ -494,6 +495,9 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     /* Refresh the balance so the dashboard is not quoting a stale snapshot. It
        was showing a six-hour-old $2,979 while the account actually held $39. */
     await snapshotPortfolio(kalshi).catch(() => null);
+    /* Keep the ledger in step with what the account actually did, including
+       trades placed outside this desk. */
+    await importKalshiHistory(kalshi).catch(() => null);
 
     const latency = Date.now() - t0;
     await query(

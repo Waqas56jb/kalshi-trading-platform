@@ -9,6 +9,7 @@ import {
   reconcileTrades, snapshotPortfolio,
 } from './orders.js';
 import { probe as probeSchedule, syncSchedule } from './schedule.js';
+import { importKalshiHistory } from './importer.js';
 import * as repo from './repo.js';
 import { backfillRatings, ratingsCoverage } from './ratings.js';
 import {
@@ -316,6 +317,12 @@ export function createApp() {
   api.post('/trades/:id/close', requireAuth, h(async (req, res) => {
     const out = await closePosition(kalshi, Number(req.params.id), { reason: 'manual' });
     res.status(out.ok ? 200 : 400).json(out);
+  }));
+
+  /** Pulls the account's real Kalshi trading into the ledger. */
+  api.all('/trades/import', h(async (req, res) => {
+    if (!requireCronOrAdmin(req, res)) return;
+    res.json(await importKalshiHistory(kalshi));
   }));
 
   api.all('/trades/auto-sell', h(async (req, res) => {

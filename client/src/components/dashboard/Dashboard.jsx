@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import ConfirmModal from './ConfirmModal';
@@ -26,6 +26,33 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
   const alerts = usePoll(() => api.alerts('open', alertSide === 'all' ? undefined : alertSide),
     { intervalMs: 10000, deps: [alertSide] });
   const settings = usePoll(() => api.settings(), {});
+
+  /* Drives the sync from the browser, on its own timer, results ignored. The
+     server holds the lock and skips when the data is already fresh, so several
+     open tabs cost nothing. This is what keeps the desk current without a manual
+     button and without a cron tier that only fires once a day. */
+  const ticking = useRef(false);
+  useEffect(() => {
+    let stopped = false;
+    const tick = async () => {
+      if (stopped || ticking.current) return;
+      ticking.current = true;
+      try { await api.tick(); } catch { /* a failed tick must not disturb the UI */ }
+      finally {
+        ticking.current = false;
+        if (!stopped) {
+          await Promise.all([
+            health.refresh({ quiet: true }),
+            alerts.refresh({ quiet: true }),
+          ]).catch(() => {});
+        }
+      }
+    };
+    tick();
+    const id = setInterval(tick, 60_000);
+    return () => { stopped = true; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const goPage = (name, close = true) => {
     if (name !== page) setPage(name);

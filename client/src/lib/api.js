@@ -100,6 +100,7 @@ export const api = {
   saveSettings: patch => call('PATCH', '/api/settings', patch),
 
   sync: () => call('POST', '/api/sync'),
+  tick: () => call('POST', '/api/tick'),
   reconcileTrades: () => call('POST', '/api/trades/reconcile'),
   closePosition: id => call('POST', `/api/trades/${id}/close`),
   scheduleProbe: () => get('/api/schedule/probe'),

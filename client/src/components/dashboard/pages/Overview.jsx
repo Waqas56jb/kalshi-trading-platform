@@ -11,7 +11,6 @@ import { AuthNotice, ErrorBox, PaperNotice } from '../Notices';
 export default function Overview({ alerts, health, settings, onPage, onTrade, onRefresh, user }) {
   const toast = useToast();
   const [days, setDays] = useState(30);
-  const [syncing, setSyncing] = useState(false);
   const { data, error, loading, refresh } = usePoll(() => api.overview(days), {
     intervalMs: 15000, deps: [days],
   });
@@ -21,10 +20,11 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
   const desk = s?.desk ?? null;
   const pnl = data?.pnl ?? [];
   const tradingLive = health?.kalshi?.trading === 'ok';
+  const syncAge = data?.sync?.finished_at
+    ? Math.round((Date.now() - new Date(data.sync.finished_at).getTime()) / 1000) : null;
   const paper = settings?.paper_trading ?? true;
   const balanceAgeMins = s?.balance_at
     ? Math.round((Date.now() - new Date(s.balance_at).getTime()) / 60000) : null;
-  const isAdmin = user?.role === 'admin';
 
   const pnlRef = useCanvas(c => {
     drawLineArea(c, pnl.map(p => p.cumulative), '#34D399', {
@@ -32,39 +32,18 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
     });
   }, [pnl.length, days, pnl[pnl.length - 1]?.cumulative]);
 
-  const syncNow = async () => {
-    setSyncing(true);
-    try {
-      const r = await api.sync();
-      await Promise.all([refresh({ quiet: true }), hot.refresh({ quiet: true }), onRefresh?.()]);
-      toast('Sync complete',
-        `${r.marketsSeen} markets · ${r.computed} priced · ${r.created} new alert${r.created === 1 ? '' : 's'}.`,
-        'tup');
-    } catch (e) {
-      toast('Sync failed', e.message, 'tdown');
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   return (
     <div className="animate-page-in">
       <PageHead
         title="Overview"
         sub={data?.sync?.finished_at
-          ? `Desk is live · last sync ${new Date(data.sync.finished_at).toLocaleTimeString()}`
+          ? `Desk is live · syncing automatically · updated ${syncAge == null ? 'just now'
+              : syncAge < 60 ? `${syncAge}s ago` : `${Math.round(syncAge / 60)}m ago`}`
           : 'Connecting to the desk…'}
         action={
-          <div className="flex gap-2.5">
-            {isAdmin && (
-              <button className="btn btn-ghost btn-sm" onClick={syncNow} disabled={syncing}>
-                {syncing ? 'Syncing…' : 'Sync now'}
-              </button>
-            )}
-            <button className="btn btn-ace btn-sm" onClick={() => onPage('alerts')}>
-              {alerts.length ? `Review ${alerts.length} open alert${alerts.length === 1 ? '' : 's'}` : 'No open alerts'}
-            </button>
-          </div>
+          <button className="btn btn-ace btn-sm" onClick={() => onPage('alerts')}>
+            {alerts.length ? `Review ${alerts.length} open alert${alerts.length === 1 ? '' : 's'}` : 'No open alerts'}
+          </button>
         }
       />
 
@@ -175,14 +154,7 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
             </div>
           )) : (
             <div className="text-center py-8 text-muted text-[13px]">
-              {loading ? 'Loading…' : (
-                <>
-                  No open alerts.
-                  {isAdmin && <><br /><button className="btn btn-ghost btn-sm mt-3" onClick={syncNow} disabled={syncing}>
-                    {syncing ? 'Syncing…' : 'Run a sync to find edges'}
-                  </button></>}
-                </>
-              )}
+              {loading ? 'Loading…' : 'No open alerts — the desk is scanning.'}
             </div>
           )}
         </Panel>

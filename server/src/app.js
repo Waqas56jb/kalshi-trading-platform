@@ -3,7 +3,7 @@ import cors from 'cors';
 import { config, configErrors } from './config.js';
 import { ping } from './db.js';
 import { clientFromEnv } from './kalshi.js';
-import { runSync, reapStaleRuns } from './sync.js';
+import { runSync, reapStaleRuns, maybeAutoSync } from './sync.js';
 import {
   autoSellAtFair, checkKalshiAuth, closePosition, executeAlert, getAuthState, livePositions,
   reconcileTrades, snapshotPortfolio,
@@ -120,7 +120,7 @@ export function createApp() {
 
   /* ----------------------------------------------------------------- health */
 
-  api.get('/health', h(async (_req, res) => {
+  api.get('/health', h(async (req, res) => {
     const problems = [...configErrors];
     if (!kalshi.ready) {
       problems.push(kalshi.keyError
@@ -266,6 +266,16 @@ export function createApp() {
     }
     await logAuthEvent({ email: target?.email, event: 'deleted', detail: `by ${req.user.email}`, req });
     res.json({ deleted: id });
+  }));
+
+  /**
+   * Background tick. The dashboard calls this on its own timer and ignores the
+   * result, so a sync taking half a minute never delays anything on screen.
+   * Deliberately not folded into /health, which is polled every 15s and must stay
+   * fast. The lock inside maybeAutoSync means extra callers cost nothing.
+   */
+  api.all('/tick', requireAuth, h(async (_req, res) => {
+    res.json(await maybeAutoSync(kalshi));
   }));
 
   /* ---------------------------------------------------------------- markets */

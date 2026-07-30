@@ -2,6 +2,7 @@ import { config, t } from './config.js';
 import { syncSchedule } from './schedule.js';
 import { snapshotPortfolio } from './orders.js';
 import { importKalshiHistory } from './importer.js';
+import { backfillRatings } from './ratings.js';
 import { query, tx } from './db.js';
 import {
   buildSignalsForEvent, classifySchedule, dayIn, dollarsToCents, looksInPlay,
@@ -480,6 +481,12 @@ export async function runSync(kalshi, { verbose = false } = {}) {
 
     const rows = rawMarkets.map(normalise).filter(r => r.ticker && r.event_ticker);
 
+    /* Rate players seen for the first time. New matches bring new competitors and
+       nothing else looks them up, which is why only 42 of 92 markets could be
+       priced — 29 of the 38 unrated players had never been tried. A match needs
+       both sides rated, so every unrated player costs a market. */
+    await backfillRatings({ limit: 12, delayMs: 120 }).catch(() => null);
+
     const out = await tx(async client => {
       await upsertPlayers(client, rows);
       const events = await upsertEvents(client, rows);
@@ -518,6 +525,37 @@ export async function runSync(kalshi, { verbose = false } = {}) {
       [runId, String(e.message).slice(0, 900), Date.now() - t0],
     ).catch(() => {});
     throw e;
+  }
+}
+
+/**
+ * Runs a sync if the data is stale and none is already in flight.
+ *
+ * Called from the dashboard's own polling, which removes the need for a manual
+ * button and for cron: as long as someone has the desk open the data keeps
+ * itself current. The lock is the sync_runs table rather than a variable,
+ * because on serverless each request may land in a different container and a
+ * process-local flag would let them all sync at once.
+ */
+export async function maybeAutoSync(kalshi, { maxAgeSeconds = 60 } = {}) {
+  const r = await query(
+    `select
+       (select count(*) from ${t('sync_runs')}
+         where status = 'running' and started_at > now() - interval '3 minutes')::int as running,
+       (select extract(epoch from (now() - max(finished_at)))
+          from ${t('sync_runs')} where status = 'ok')::int as age_seconds`,
+  );
+  const { running, age_seconds: age } = r.rows[0];
+
+  if (running > 0) return { skipped: 'already_running' };
+  if (age != null && age < maxAgeSeconds) return { skipped: 'fresh', age_seconds: age };
+
+  try {
+    const out = await runSync(kalshi);
+    return { ran: true, ...out };
+  } catch (e) {
+    // a failed auto-sync must never break the request that triggered it
+    return { skipped: 'failed', error: String(e.message).slice(0, 160) };
   }
 }
 

@@ -18,6 +18,8 @@ const TOGGLES = [
   ['pushover_enabled', 'Pushover alerts', 'Instant push to your phone on every edge'],
   ['sms_fallback', 'Twilio SMS fallback', 'SMS if push is not delivered in 5s'],
   ['inplay_enabled', 'In-play markets', 'Also price matches that are already under way'],
+  ['auto_sell_at_fair', 'Auto-sell at fair value',
+   'Close a position automatically once its bid reaches the modelled fair value — the edge is gone, so holding on is match risk for nothing.'],
 ];
 
 const NUMBERS = [
@@ -36,6 +38,8 @@ const TIMING = [
 ];
 
 const GUARDS = [
+  ['min_edge_cents', 'Minimum edge (¢)', 1, 1,
+   'Alerts need at least this much absolute edge. Cents, not percent — percentage EV inflates on cheap contracts, so a 3¢ edge on a 1¢ ask reads as +300%.'],
   ['min_bid_cents', 'Minimum bid (¢)', 0, 1,
    'Below this nobody is really making a market on this player.'],
   ['max_spread_cents', 'Maximum spread (¢)', 1, 1,

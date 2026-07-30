@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { config } from './config.js';
+import { config, configErrors } from './config.js';
 import { ping } from './db.js';
 import { clientFromEnv } from './kalshi.js';
 import { runSync, reapStaleRuns } from './sync.js';
@@ -65,24 +65,40 @@ export function createApp() {
   /* ----------------------------------------------------------------- health */
 
   api.get('/health', h(async (_req, res) => {
+    const problems = [...configErrors];
+    if (!kalshi.ready) {
+      problems.push(kalshi.keyError
+        ? `Kalshi signing key unavailable — ${kalshi.keyError}`
+        : 'KALSHI_API_KEY_ID is not set');
+    }
+
+    // each probe is independently guarded so one broken dependency still yields
+    // a readable report rather than a 500
+    const settle = p => p.catch(e => ({ __error: e.message?.slice(0, 200) }));
     const [db, auth, sync, ratings] = await Promise.all([
-      ping().then(r => ({ ok: true, now: r.now })).catch(e => ({ ok: false, error: e.message })),
-      checkKalshiAuth(kalshi),
-      repo.lastSync(),
-      ratingsCoverage(),
+      settle(ping().then(r => ({ ok: true, now: r.now }))),
+      settle(checkKalshiAuth(kalshi)),
+      settle(repo.lastSync()),
+      settle(ratingsCoverage()),
     ]);
-    res.json({
-      ok: db.ok,
-      db,
+
+    const dbOk = db?.ok === true;
+    res.status(dbOk ? 200 : 503).json({
+      ok: dbOk && problems.length === 0,
+      problems,
+      db: dbOk ? db : { ok: false, error: db.__error ?? db.error },
       kalshi: {
         base: config.kalshi.base,
-        marketData: sync?.status === 'error' ? 'degraded' : 'ok',
-        trading: auth.ok ? 'ok' : auth.reachable === false ? 'unreachable' : 'unauthenticated',
-        reachable: auth.reachable ?? null,
-        authError: auth.ok ? null : auth.error,
+        keyLoaded: kalshi.ready,
+        marketData: !kalshi.ready ? 'unavailable' : sync?.status === 'error' ? 'degraded' : 'ok',
+        trading: auth?.ok ? 'ok'
+          : !kalshi.ready ? 'no_credentials'
+          : auth?.reachable === false ? 'unreachable' : 'unauthenticated',
+        reachable: auth?.reachable ?? null,
+        authError: auth?.ok ? null : (auth?.error ?? auth?.__error ?? null),
       },
-      sync,
-      ratings,
+      sync: sync?.__error ? { error: sync.__error } : sync,
+      ratings: ratings?.__error ? { error: ratings.__error } : ratings,
       series: config.sync.seriesTickers,
       runtime: process.env.VERCEL ? 'vercel' : 'node',
     });

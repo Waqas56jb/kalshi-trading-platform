@@ -5,9 +5,21 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(here, '..');
 
-function req(name) {
+/**
+ * Records a missing required variable instead of throwing.
+ *
+ * This module is imported at module load on serverless hosts, so throwing here
+ * would crash every route — including /api/health, which is the endpoint that
+ * should still be reachable to report the misconfiguration.
+ */
+export const configErrors = [];
+
+function req(name, hint = '') {
   const v = process.env[name];
-  if (!v) throw new Error(`Missing required env var ${name} — see server/.env`);
+  if (!v) {
+    configErrors.push(`${name} is not set${hint ? ` — ${hint}` : ''}`);
+    return '';
+  }
   return v;
 }
 
@@ -32,7 +44,7 @@ export const config = {
   },
 
   db: {
-    url: req('DATABASE_URL'),
+    url: req('DATABASE_URL', 'use the Supabase session pooler and percent-encode the password'),
     prefix: process.env.DB_TABLE_PREFIX || 'kalshi_',
   },
 

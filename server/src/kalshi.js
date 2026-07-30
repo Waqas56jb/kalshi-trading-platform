@@ -13,12 +13,39 @@ export class KalshiClient {
   constructor({ base, keyId, privateKeyPath, privateKeyPem }) {
     this.base = (base || 'https://api.elections.kalshi.com/trade-api/v2').replace(/\/$/, '');
     this.keyId = keyId;
-    const pem = privateKeyPem || fs.readFileSync(privateKeyPath, 'utf8');
-    this.privateKey = crypto.createPrivateKey(pem);
     this.basePath = new URL(this.base).pathname.replace(/\/$/, '');
+
+    /* Loading the key must not throw here. This runs at module load on
+       serverless hosts, so a missing or malformed key would crash every route —
+       including /api/health, the one endpoint that should still be able to
+       explain what is wrong. The error is recorded and raised only when a
+       request actually needs a signature. */
+    this.privateKey = null;
+    this.keyError = null;
+    try {
+      let pem = privateKeyPem;
+      if (!pem) {
+        if (!privateKeyPath) throw new Error('no private key configured');
+        if (!fs.existsSync(privateKeyPath)) {
+          throw new Error(`private key file not found at ${privateKeyPath} — set KALSHI_PRIVATE_KEY instead when deploying`);
+        }
+        pem = fs.readFileSync(privateKeyPath, 'utf8');
+      }
+      this.privateKey = crypto.createPrivateKey(pem);
+    } catch (e) {
+      this.keyError = e.message;
+      console.error('[kalshi] private key unavailable:', e.message);
+    }
   }
 
+  get ready() { return this.privateKey !== null && Boolean(this.keyId); }
+
   sign(timestamp, method, path) {
+    if (!this.privateKey) {
+      const e = new Error(`Kalshi private key unavailable: ${this.keyError}`);
+      e.code = 'kalshi_key_missing';
+      throw e;
+    }
     return crypto.sign('sha256', Buffer.from(`${timestamp}${method}${path}`), {
       key: this.privateKey,
       padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
@@ -36,6 +63,14 @@ export class KalshiClient {
    * will reject if it drifts.
    */
   async request(method, endpoint, { query, body, signal, retries = 2, timeoutMs = 20_000 } = {}) {
+    // fail fast rather than burning the retry budget on an unsignable request
+    if (!this.privateKey) {
+      const e = new Error(`Kalshi private key unavailable: ${this.keyError}`);
+      e.code = 'kalshi_key_missing';
+      e.status = 0;
+      throw e;
+    }
+
     const path = this.basePath + endpoint;
     const url = new URL(this.base + endpoint);
     if (query) {

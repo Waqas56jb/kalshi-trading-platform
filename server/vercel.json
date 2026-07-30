@@ -1,20 +1,15 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "echo 'no build step — serverless functions only'",
   "installCommand": "npm install --omit=dev",
+  "outputDirectory": "public",
 
   "functions": {
-    "api/index.js": {
+    "api/**": {
       "maxDuration": 60,
       "memory": 1024
     }
   },
-
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/", "destination": "/api/index" }
-  ],
 
   "crons": [
     { "path": "/api/sync", "schedule": "0 6 * * *" },

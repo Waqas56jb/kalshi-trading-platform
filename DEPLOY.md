@@ -9,8 +9,17 @@ repo. Each has its own `vercel.json` and its own dependencies.
 
 **New Project → import this repo → set Root Directory to `server`.**
 
-Vercel picks up `server/vercel.json`, which routes every request into
-`server/api/index.js` (the Express app) and registers the cron jobs.
+Vercel picks up `server/vercel.json`. There is no build step — the project is
+serverless functions plus a small static page:
+
+- `server/api/[...slug].js` is a catch-all route, so every `/api/*` request
+  reaches the Express app with its original path intact. (A `rewrites` rule was
+  tried first and is wrong here: it hands Express the *rewritten* path, so
+  `/api/health` arrives as `/api/index` and 404s.)
+- `outputDirectory` is `public`, which both satisfies Vercel's build check and
+  keeps `src/` from being served as static files.
+- Routes are mounted at both `/api` and `/`, so the API answers regardless of
+  whether the platform preserves the path.
 
 ### Environment variables
 

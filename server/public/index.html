@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CourtEdge API</title>
+<style>
+  :root { color-scheme: dark }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: #07090D; color: #EAF0F6;
+    font: 15px/1.6 ui-sans-serif, system-ui, sans-serif;
+  }
+  main { max-width: 30rem; padding: 2rem }
+  h1 { font-size: 1.25rem; margin: 0 0 .5rem; letter-spacing: -.02em }
+  p { color: #8B98A8; margin: 0 0 1.5rem }
+  a { color: #D8F651 }
+  code {
+    font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: .8125rem;
+    background: #0E141B; border: 1px solid #1B2430; border-radius: .5rem;
+    padding: .15rem .4rem;
+  }
+  ul { list-style: none; padding: 0; margin: 0; display: grid; gap: .4rem }
+</style>
+</head>
+<body>
+<main>
+  <h1>CourtEdge API</h1>
+  <p>This host serves the backend only. The trading terminal is a separate deployment.</p>
+  <ul>
+    <li><a href="/api/health"><code>GET /api/health</code></a> — database, Kalshi and sync status</li>
+    <li><code>GET /api/markets</code> — live ITF markets with model output</li>
+    <li><code>GET /api/alerts</code> — open mispricing alerts</li>
+  </ul>
+</main>
+</body>
+</html>

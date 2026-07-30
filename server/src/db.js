@@ -7,15 +7,21 @@ import { config } from './config.js';
  * before the pooler's own timeout, and `query` retries once on the transient
  * connection errors that still slip through.
  */
+/* On serverless every warm container holds its own pool, so a generous `max`
+   multiplies across containers and exhausts the shared Supabase pooler. Keep it
+   tiny there and let an idle container release its socket; a long-running
+   process can afford a real pool. */
+const SERVERLESS = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+
 export const pool = new pg.Pool({
   connectionString: config.db.url,
   ssl: { rejectUnauthorized: false },
-  max: 8,
-  idleTimeoutMillis: 10_000,
-  connectionTimeoutMillis: 30_000,
+  max: SERVERLESS ? 2 : 8,
+  idleTimeoutMillis: SERVERLESS ? 5_000 : 10_000,
+  connectionTimeoutMillis: SERVERLESS ? 12_000 : 30_000,
   keepAlive: true,
   keepAliveInitialDelayMillis: 5_000,
-  allowExitOnIdle: false,
+  allowExitOnIdle: SERVERLESS,
 });
 
 // an idle client erroring must never take the process down

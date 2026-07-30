@@ -5,11 +5,15 @@
   "outputDirectory": "public",
 
   "functions": {
-    "api/**": {
+    "api/*.js": {
       "maxDuration": 60,
       "memory": 1024
     }
   },
+
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index" }
+  ],
 
   "crons": [
     { "path": "/api/sync", "schedule": "0 6 * * *" },

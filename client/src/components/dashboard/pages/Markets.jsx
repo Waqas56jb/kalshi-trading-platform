@@ -5,8 +5,11 @@ import { api, DESK_TZ, fmtMatchTime, fmtNum, fmtPct, localZone } from '../../../
 import { PageHead } from '../PageHead';
 import { Empty, ErrorBox, Loading } from '../Notices';
 
-const FILTERS = [['all', 'All'], ['upcoming', 'Not started'], ['mispriced', 'Mispriced'],
-  ['underdog', 'Underdogs'], ['favourite', 'Favourites'], ['inplay', 'In play']];
+/* Upcoming first and selected by default: the trader's words were "I don't get
+   mistaken by matches that have already happened". */
+const FILTERS = [['upcoming', 'Upcoming'], ['mispriced', 'Mispriced'],
+  ['underdog', 'Underdogs'], ['favourite', 'Favourites'],
+  ['inplay', 'In play'], ['all', 'All']];
 const SORTS = [['edge', 'Edge'], ['starts', 'Start time'], ['ev', 'EV %']];
 
 /**
@@ -57,7 +60,7 @@ function StartCell({ matchDate, playState, volumeGrowth }) {
 }
 
 export default function Markets({ search, onTrade }) {
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useState('upcoming');
   const [sort, setSort] = useState('edge');
   const { data, error, loading } = usePoll(
     () => api.markets({ filter, search, limit: 300, sort }),
@@ -72,8 +75,8 @@ export default function Markets({ search, onTrade }) {
       <PageHead
         title="Live markets"
         sub={count
-          ? `${rows.length} shown · ${count.total} open ITF markets · ${count.priced} priced · `
-            + `${localZone()} — play state read from the order book`
+          ? `${rows.length} ${filter === 'upcoming' ? 'yet to start' : 'shown'} · `
+            + `${count.total} open ITF markets · ${count.priced} priced · ${localZone()}`
           : 'Streaming from the Kalshi Trade API'}
         action={
           <div className="flex gap-2 items-center flex-wrap max-sm:w-full">

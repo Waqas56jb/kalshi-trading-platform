@@ -19,7 +19,18 @@ const TOGGLES = [
   ['sms_fallback', 'Twilio SMS fallback', 'SMS if push is not delivered in 5s'],
   ['inplay_enabled', 'In-play markets', 'Also price matches that are already under way'],
   ['auto_sell_at_fair', 'Auto-sell at fair value',
-   'Close a position automatically once its bid reaches the modelled fair value — the edge is gone, so holding on is match risk for nothing.'],
+   'Close a position once its bid reaches the modelled fair value — the edge is gone, so holding on is match risk for nothing.'],
+  ['take_profit_enabled', 'Take profit at a target return',
+   'Close a position once it is up by the percentage below, whether or not it has reached fair value.'],
+  ['stop_loss_enabled', 'Stop loss',
+   'Close a position once it is down by the percentage below.'],
+];
+
+const EXITS = [
+  ['take_profit_pct', 'Take profit at (%)', 1, 1,
+   'Return on the entry price, measured against the live bid — the price you could actually sell at.'],
+  ['stop_loss_pct', 'Stop loss at (%)', 1, 1,
+   'How far the bid may fall below entry before the position is closed.'],
 ];
 
 const NUMBERS = [
@@ -73,6 +84,7 @@ export default function Settings({ state, user, onUserChange }) {
         max_exposure_per_match: Number(form.max_exposure_per_match),
         ...Object.fromEntries(GUARDS.map(([k]) => [k, Number(form[k])])),
         ...Object.fromEntries(TIMING.map(([k]) => [k, Number(form[k])])),
+        ...Object.fromEntries(EXITS.map(([k]) => [k, Number(form[k])])),
         ...Object.fromEntries(TOGGLES.map(([k]) => [k, !!form[k]])),
       };
       const r = await api.saveSettings(patch);
@@ -171,6 +183,22 @@ export default function Settings({ state, user, onUserChange }) {
                 value={form[k]}
                 onChange={e => set(k, e.target.value)}
               />
+            </div>
+          ))}
+        </Panel>
+
+        <Panel title="Exit rules">
+          <p className="text-[12.5px] text-muted mb-4.5">
+            Each rule is checked against the live bid on every sync — the price the position could
+            actually be sold at, not the mid. Whichever triggers first closes the position, and the
+            ledger records which one it was.
+          </p>
+          {EXITS.map(([k, label, min, step, help]) => (
+            <div className="fld mb-4.5" key={k}>
+              <Label>{label}</Label>
+              <input type="number" min={min} step={step} value={form[k] ?? ''}
+                onChange={e => set(k, e.target.value)} />
+              <p className="text-[11.5px] text-muted2 mt-1.5">{help}</p>
             </div>
           ))}
         </Panel>

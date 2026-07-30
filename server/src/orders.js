@@ -314,25 +314,61 @@ export async function closePosition(kalshi, tradeId, { reason = 'manual' } = {})
  * hold is just taking match risk for no edge.
  */
 export async function autoSellAtFair(kalshi) {
-  const cfg = await query(`select auto_sell_at_fair, auto_sell_buffer_cents from ${t('settings')} where id = 1`);
-  if (!cfg.rows[0]?.auto_sell_at_fair) return { enabled: false, closed: 0 };
-  const buffer = Number(cfg.rows[0].auto_sell_buffer_cents ?? 0);
+  const cfg = (await query(
+    `select auto_sell_at_fair, auto_sell_buffer_cents,
+            take_profit_enabled, take_profit_pct,
+            stop_loss_enabled, stop_loss_pct
+     from ${t('settings')} where id = 1`)).rows[0] ?? {};
 
+  const anyRule = cfg.auto_sell_at_fair || cfg.take_profit_enabled || cfg.stop_loss_enabled;
+  if (!anyRule) return { enabled: false, closed: 0 };
+
+  const buffer = Number(cfg.auto_sell_buffer_cents ?? 0);
+  const tp = Number(cfg.take_profit_pct ?? 0);
+  const sl = Number(cfg.stop_loss_pct ?? 0);
+
+  /* Each rule is evaluated against the live bid — the price the position could
+     actually be sold at, not the mid or the ask. */
   const due = await query(
-    `select tr.id, tr.player_name, tr.fair_cents, m.yes_bid_cents
+    `select tr.id, tr.player_name, tr.entry_cents, tr.fair_cents, m.yes_bid_cents,
+            round(((m.yes_bid_cents - tr.entry_cents)::numeric / nullif(tr.entry_cents, 0)) * 100, 1) as return_pct
      from ${t('trades')} tr
      join ${t('markets')} m on m.ticker = tr.ticker
      where tr.status in ('filled','partial')
-       and tr.fair_cents is not null and m.yes_bid_cents is not null
-       and m.yes_bid_cents >= tr.fair_cents - $1
+       and m.yes_bid_cents is not null and tr.entry_cents > 0
+       and (
+         ($1::boolean and tr.fair_cents is not null and m.yes_bid_cents >= tr.fair_cents - $2::int)
+         or ($3::boolean and ((m.yes_bid_cents - tr.entry_cents)::numeric / tr.entry_cents) * 100 >= $4::numeric)
+         or ($5::boolean and ((m.yes_bid_cents - tr.entry_cents)::numeric / tr.entry_cents) * 100 <= -($6::numeric))
+       )
      limit 25`,
-    [buffer],
+    [Boolean(cfg.auto_sell_at_fair), buffer,
+      Boolean(cfg.take_profit_enabled), tp,
+      Boolean(cfg.stop_loss_enabled), sl],
   );
 
   const closed = [];
   for (const row of due.rows) {
-    const out = await closePosition(kalshi, row.id, { reason: 'auto_fair_value' });
-    if (out.ok) closed.push({ id: row.id, player: row.player_name, exit: out.trade.exit_cents });
+    const ret = Number(row.return_pct ?? 0);
+    // report the rule that actually triggered, so the ledger explains itself
+    const reason = cfg.take_profit_enabled && ret >= tp ? 'take_profit'
+      : cfg.stop_loss_enabled && ret <= -sl ? 'stop_loss'
+      : 'auto_fair_value';
+
+    const out = await closePosition(kalshi, row.id, { reason });
+    if (out.ok) {
+      closed.push({
+        id: row.id, player: row.player_name, exit: out.trade.exit_cents,
+        return_pct: ret, reason,
+      });
+    }
   }
-  return { enabled: true, checked: due.rowCount, closed: closed.length, positions: closed };
+  return {
+    enabled: true, checked: due.rowCount, closed: closed.length, positions: closed,
+    rules: {
+      fair_value: Boolean(cfg.auto_sell_at_fair),
+      take_profit: cfg.take_profit_enabled ? `+${tp}%` : false,
+      stop_loss: cfg.stop_loss_enabled ? `-${sl}%` : false,
+    },
+  };
 }

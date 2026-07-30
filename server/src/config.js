@@ -44,7 +44,16 @@ export const config = {
   },
 
   db: {
-    url: req('DATABASE_URL', 'use the Supabase session pooler and percent-encode the password'),
+    /* Transaction pooler (:6543). Session mode (:5432) caps the whole project at
+       15 clients, which serverless containers plus cron plus a local process
+       exhaust — the desk started returning EMAXCONNSESSION. Transaction mode holds
+       a server connection only for the length of a statement or transaction, so it
+       multiplexes far more clients. node-postgres is compatible because it uses
+       unnamed prepared statements, which pgbouncer transaction mode supports. */
+    url: req('DATABASE_URL', 'use the Supabase transaction pooler on port 6543 and percent-encode the password'),
+    /* DDL and advisory locks want a session connection, so migrations use their
+       own URL and fall back to the runtime one. */
+    migrationUrl: process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL || '',
     prefix: process.env.DB_TABLE_PREFIX || 'kalshi_',
   },
 

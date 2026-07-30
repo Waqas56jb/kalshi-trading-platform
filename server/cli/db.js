@@ -15,7 +15,7 @@ const TABLES = ['players', 'events', 'markets', 'price_history', 'signals',
   'alerts', 'trades', 'settings', 'sync_runs', 'portfolio_snapshots'];
 
 function supabase(args) {
-  const r = spawnSync('npx', ['supabase', ...args, '--db-url', config.db.url], {
+  const r = spawnSync('npx', ['supabase', ...args, '--db-url', config.db.migrationUrl || config.db.url], {
     stdio: 'inherit', shell: true,
   });
   return r.status ?? 1;

@@ -51,20 +51,20 @@ export async function importKalshiHistory(kalshi, { limit = 500 } = {}) {
 
   const rows = [];
   for (const [ticker, group] of byMarket) {
-    const buys = group.filter(f => f.action === 'buy');
-    const source = buys.length ? buys : group;
-
-    // size-weighted average entry, in cents
-    let contracts = 0;
-    let costCents = 0;
-    let fees = 0;
-    for (const f of source) {
+    /* Cash in and out, per side. Kalshi quotes both a yes and a no price on every
+       fill, and the one that matters is the side actually transacted. */
+    let bought = 0, boughtCents = 0, soldCents = 0, fees = 0;
+    for (const f of group) {
       const n = Number(f.count_fp ?? 0);
-      const priceCents = Math.round(Number(f.yes_price_dollars ?? 0) * 100);
-      contracts += n;
-      costCents += n * priceCents;
+      const side = f.side === 'no' ? 'no' : 'yes';
+      const priceCents = Math.round(
+        Number((side === 'no' ? f.no_price_dollars : f.yes_price_dollars) ?? 0) * 100);
       fees += Number(f.fee_cost ?? 0);
+      if (f.action === 'sell') soldCents += n * priceCents;
+      else { bought += n; boughtCents += n * priceCents; }
     }
+    const contracts = bought;
+    const costCents = boughtCents;
     if (!contracts) continue;
 
     const entry = Math.round(costCents / contracts);
@@ -74,18 +74,27 @@ export async function importKalshiHistory(kalshi, { limit = 500 } = {}) {
        none, and $14,514 at risk that did not exist. */
     const info = settledBy.get(ticker);
     const closed = !info || !info.open;
+
+    /* P&L comes from Kalshi and nowhere else.
+       Reconstructing it from fills was tried and abandoned: a fill carries both a
+       yes and a no price, so differencing buy cost against sell proceeds across
+       mixed sides produced +$14,040 on $12,909 staked for an account that in fact
+       went from $2,979 to zero. Where Kalshi reports no realised figure the
+       outcome is recorded as unknown rather than guessed. */
     const pnl = info ? info.realised : 0;
+    const pnlKnown = Boolean(info) && info.realised !== 0;
     const first = group.reduce((a, b) => (a.created_time < b.created_time ? a : b));
 
     rows.push({
       ticker,
-      side: source[0]?.side === 'no' ? 'no' : 'yes',
+      side: (group.find(f => f.action === 'buy') ?? group[0])?.side === 'no' ? 'no' : 'yes',
       entry_cents: entry,
       size_contracts: Math.round(contracts),
       stake_usd: +(costCents / 100).toFixed(2),
       fees_usd: +fees.toFixed(2),
       status: closed ? 'settled' : 'filled',
-      result: closed ? (pnl > 0 ? 'won' : pnl < 0 ? 'lost' : 'void') : null,
+      // null result = closed, but Kalshi reported no P&L for it; kept out of hit rate
+      result: closed && pnlKnown ? (pnl > 0 ? 'won' : 'lost') : null,
       pnl_usd: closed ? +pnl.toFixed(2) : 0,
       placed_at: first.created_time ?? new Date().toISOString(),
       client_order_id: `kalshi-import:${ticker}`,

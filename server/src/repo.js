@@ -350,8 +350,11 @@ export async function overviewStats() {
            and placed_at::date = current_date), 0)::numeric as pnl_today,
          count(*) filter (where status in ('pending','filled','partial'))::int as open_positions,
          coalesce(sum(stake_usd) filter (where status in ('pending','filled','partial')), 0)::numeric as at_risk,
-         count(*) filter (where status = 'settled')::int as settled,
-         count(*) filter (where result = 'won')::int as won
+         -- voids are neither wins nor losses; counting them made 1 win in 47
+         -- read as a 2% hit rate when the real figure is over decided trades only
+         count(*) filter (where result in ('won','lost'))::int as settled,
+         count(*) filter (where result = 'won')::int as won,
+         count(*) filter (where result = 'void')::int as void
        from ${t('trades')}`),
     () => query(`select balance_cents, open_positions, captured_at from ${t('portfolio_snapshots')}
            order by captured_at desc limit 1`),
@@ -389,6 +392,7 @@ export async function overviewStats() {
     at_risk: Number(tr.at_risk),
     settled,
     won: tr.won,
+    void: tr.void,
     hit_rate: settled > 0 ? Math.round((tr.won / settled) * 100) : null,
     markets: mkts,
     open_alerts: alerts.rows[0].n,

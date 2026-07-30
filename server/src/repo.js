@@ -82,6 +82,7 @@ export async function priceHistory(ticker, limit = 200) {
 export async function listAlerts({ status = 'open', limit = 50 } = {}) {
   const r = await query(
     `select a.*, m.yes_ask_size, m.volume, e.round, e.tour_level,
+            m.occurrence_datetime as market_starts_at,
             (a.fair_cents - a.market_cents) as edge_cents,
             (m.yes_ask_cents - m.yes_bid_cents) as spread_cents,
             s.player_utr, s.opponent_utr, s.opponent_name
@@ -408,6 +409,7 @@ const SETTABLE = new Set([
   'manual_approval', 'sweep_full_volume', 'pushover_enabled', 'sms_fallback',
   'inplay_enabled', 'bot_enabled', 'paper_trading',
   'min_bid_cents', 'max_spread_cents', 'max_edge_cents',
+  'prematch_only', 'alert_lead_minutes', 'alert_max_hours', 'sound_enabled',
 ]);
 
 export async function updateSettings(patch) {

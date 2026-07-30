@@ -193,6 +193,10 @@ async function computeSignals(client, rows, settings) {
   const minBid = Number(settings.min_bid_cents ?? 5);
   const maxSpread = Number(settings.max_spread_cents ?? 12);
   const maxEdge = Number(settings.max_edge_cents ?? 25);
+  const prematchOnly = settings.prematch_only !== false;
+  const leadMs = Number(settings.alert_lead_minutes ?? 10) * 60_000;
+  const maxAheadMs = Number(settings.alert_max_hours ?? 72) * 3_600_000;
+  const now = Date.now();
 
   const byTicker = new Map(rows.map(r => [r.ticker, r]));
 
@@ -215,6 +219,17 @@ async function computeSignals(client, rows, settings) {
     if (bid == null || bid < minBid) return 'no_real_bid';
     if (ask != null && bid != null && ask - bid > maxSpread) return 'spread_too_wide';
     if (edge > maxEdge) return 'market_disagrees_strongly';
+
+    /* Pre-match window. The model prices form on paper, not what is happening on
+       court, so an in-play quote is not something it can reason about. The lead
+       time keeps out alerts that arrive too late to act on. */
+    if (prematchOnly) {
+      const startsAt = m?.occurrence_datetime ? new Date(m.occurrence_datetime).getTime() : null;
+      if (startsAt == null) return 'no_start_time';
+      if (startsAt <= now) return 'match_already_started';
+      if (startsAt - now < leadMs) return 'too_close_to_start';
+      if (startsAt - now > maxAheadMs) return 'too_far_ahead';
+    }
     return null;                                     // actionable
   };
 
@@ -275,13 +290,13 @@ async function computeSignals(client, rows, settings) {
 }
 
 /** Opens alerts for newly actionable signals; expires ones that no longer qualify. */
-async function reconcileAlerts(client) {
+async function reconcileAlerts(client, settings) {
   const created = await client.query(
     `insert into ${t('alerts')}
        (ticker, event_ticker, player_name, matchup, tournament, utr_gap,
-        fair_cents, market_cents, ev_pct, volume_available)
+        fair_cents, market_cents, ev_pct, volume_available, starts_at)
      select s.ticker, s.event_ticker, s.player_name, e.matchup, e.tournament, s.utr_gap,
-            s.fair_cents, s.market_cents, s.ev_pct, m.yes_ask_size
+            s.fair_cents, s.market_cents, s.ev_pct, m.yes_ask_size, m.occurrence_datetime
      from ${t('signals')} s
      join ${t('markets')} m on m.ticker = s.ticker
      left join ${t('events')} e on e.event_ticker = s.event_ticker
@@ -293,15 +308,33 @@ async function reconcileAlerts(client) {
      returning id`,
   );
 
+  /* Alerts raised before `starts_at` existed have it null. Fill it in from the
+     market so the countdown works and the expiry below can judge them. */
+  await client.query(
+    `update ${t('alerts')} a set starts_at = m.occurrence_datetime
+     from ${t('markets')} m
+     where m.ticker = a.ticker and a.starts_at is null
+       and m.occurrence_datetime is not null`,
+  );
+
+  /* An alert dies when its signal stops qualifying, when the match starts, or —
+     under pre-match-only — when its start time cannot be established at all. A
+     pre-match edge is not actionable once play is under way, and an alert whose
+     timing is unknown cannot be shown to be pre-match. */
   const expired = await client.query(
     `update ${t('alerts')} a set status = 'expired', resolved_at = now()
      where a.status = 'open'
-       and not exists (
-         select 1 from ${t('signals')} s
-         join ${t('markets')} m on m.ticker = s.ticker
-         where s.ticker = a.ticker and s.is_actionable
-           and m.status in ('active','open','initialized'))
+       and (
+         a.starts_at <= now()
+         or ($1::boolean and a.starts_at is null)
+         or not exists (
+           select 1 from ${t('signals')} s
+           join ${t('markets')} m on m.ticker = s.ticker
+           where s.ticker = a.ticker and s.is_actionable
+             and m.status in ('active','open','initialized'))
+       )
      returning a.id`,
+    [settings.prematch_only !== false],
   );
 
   return { created: created.rowCount ?? 0, expired: expired.rowCount ?? 0 };
@@ -336,7 +369,7 @@ export async function runSync(kalshi, { verbose = false } = {}) {
       const upserted = await upsertMarkets(client, rows);
       const ticks = await recordPriceHistory(client, rows);
       const sig = await computeSignals(client, rows, settings);
-      const alerts = await reconcileAlerts(client);
+      const alerts = await reconcileAlerts(client, settings);
       return { events, upserted, ticks, ...sig, ...alerts };
     });
 

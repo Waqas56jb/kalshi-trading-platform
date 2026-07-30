@@ -1,9 +1,39 @@
+import { useState } from 'react';
 import { Tag } from '../../common';
+import { notificationsAllowed, requestNotificationPermission, soundUnlocked, unlockSound, playAlertChime } from '../../../lib/alertSound';
 import { api, fmtNum, fmtPct, fmtTime } from '../../../lib/api';
 import { PageHead } from '../PageHead';
 import { AuthNotice, Empty, ErrorBox, Loading } from '../Notices';
 
-export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health }) {
+/** Minutes until first serve, or null when unknown. */
+function minutesToStart(iso) {
+  if (!iso) return null;
+  return Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+}
+
+function Countdown({ iso }) {
+  const mins = minutesToStart(iso);
+  if (mins == null) return <span className="text-muted2">start time unknown</span>;
+  if (mins <= 0) return <span className="text-down">already started</span>;
+  const h = Math.floor(mins / 60);
+  return (
+    <span className={mins <= 30 ? 'text-amber' : 'text-muted'}>
+      starts in {h ? `${h}h ${mins % 60}m` : `${mins}m`}
+    </span>
+  );
+}
+
+export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health, settings }) {
+  const [alertsOn, setAlertsOn] = useState(() => soundUnlocked() && notificationsAllowed());
+
+  /* Browsers block audio until the page has been interacted with, so this has to
+     be an explicit click rather than something done on mount. */
+  const enableAlerts = async () => {
+    const sound = unlockSound();
+    const notif = await requestNotificationPermission();
+    setAlertsOn(sound || notif);
+    if (sound) playAlertChime();
+  };
   const alerts = state.data?.alerts ?? [];
   const tradingLive = health?.kalshi?.trading === 'ok';
   const threshold = health?.settings?.min_ev_threshold;
@@ -12,11 +42,20 @@ export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health
     <div className="animate-page-in">
       <PageHead
         title="Mispricing alerts"
-        sub="Opportunities above your EV threshold — approve to execute"
+        sub={settings?.prematch_only !== false
+          ? `Pre-match only · at least ${settings?.alert_lead_minutes ?? 10} minutes before first serve`
+          : 'Opportunities above your EV threshold — approve to execute'}
         action={
-          <button className="btn btn-ghost btn-sm" onClick={onDismissAll} disabled={!alerts.length}>
-            Dismiss all
-          </button>
+          <div className="flex gap-2.5 items-center">
+            {!alertsOn && (
+              <button className="btn btn-ghost btn-sm" onClick={enableAlerts}>
+                🔔 Enable sound &amp; notifications
+              </button>
+            )}
+            <button className="btn btn-ghost btn-sm" onClick={onDismissAll} disabled={!alerts.length}>
+              Dismiss all
+            </button>
+          </div>
         }
       />
 
@@ -75,8 +114,9 @@ export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health
                 </button>
               </div>
 
-              <div className="font-mono text-[11px] text-muted2 mt-3 text-right">
-                opened {fmtTime(a.created_at)}
+              <div className="font-mono text-[11px] mt-3 flex justify-between gap-2">
+                <Countdown iso={a.starts_at ?? a.market_starts_at} />
+                <span className="text-muted2">opened {fmtTime(a.created_at)}</span>
               </div>
             </div>
           );

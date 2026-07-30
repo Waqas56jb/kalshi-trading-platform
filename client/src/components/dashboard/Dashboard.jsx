@@ -9,6 +9,7 @@ import Trades from './pages/Trades';
 import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
 import { usePoll } from '../../hooks/useApi';
+import { useAlertNotifier } from '../../hooks/useAlertNotifier';
 import { api } from '../../lib/api';
 import { useToast } from '../Toasts';
 
@@ -31,7 +32,21 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
 
   const openAlerts = alerts.data?.alerts ?? [];
   const h = health.data ?? null;
-  const botEnabled = settings.data?.settings?.bot_enabled ?? true;
+  const cfg = settings.data?.settings ?? null;
+  const botEnabled = cfg?.bot_enabled ?? true;
+
+  /* Chime + desktop notification when a genuinely new alert lands. */
+  useAlertNotifier(openAlerts, {
+    enabled: cfg?.sound_enabled !== false,
+    onNotify: fresh => {
+      const a = fresh[0];
+      toast(
+        fresh.length === 1 ? 'New mispricing 🔔' : `${fresh.length} new mispricings 🔔`,
+        a ? `${a.player_name} — ${a.market_cents}¢ vs fair ${a.fair_cents}¢`
+          : 'Check the alert queue.',
+      );
+    },
+  });
 
   const toggleBot = async () => {
     const next = !botEnabled;
@@ -109,7 +124,7 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
           {page === 'overview' && (
             <Overview
               alerts={openAlerts} health={h} user={user}
-              settings={settings.data?.settings ?? null}
+              settings={cfg}
               onPage={goPage} onTrade={setModalAlert}
               onRefresh={() => alerts.refresh({ quiet: true })}
             />
@@ -118,7 +133,7 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
           {page === 'alerts' && (
             <Alerts
               state={alerts} onDismiss={dismissAlert} onDismissAll={dismissAll}
-              onTrade={setModalAlert} health={h}
+              onTrade={setModalAlert} health={h} settings={cfg}
             />
           )}
           {page === 'trades' && <Trades user={user} />}
@@ -131,7 +146,7 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
 
       <ConfirmModal
         alert={modalAlert} busy={executing} health={h}
-        paper={settings.data?.settings?.paper_trading ?? true}
+        paper={cfg?.paper_trading ?? true}
         onClose={() => setModalAlert(null)} onConfirm={confirmExecute}
       />
     </div>

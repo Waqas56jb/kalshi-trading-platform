@@ -7,6 +7,8 @@ import { ErrorBox, Loading } from '../Notices';
 import { MyAccountPanel, TeamPanel } from './AccountPanels';
 
 const TOGGLES = [
+  ['paper_trading', 'Paper trading',
+   'Record positions at the real ask without sending an order to Kalshi. Settles against the real result.'],
   ['manual_approval', 'Manual approval required', 'Every order needs your tap before it fires'],
   ['sweep_full_volume', 'Sweep full volume at price', 'Cap size at the contracts available at the ask'],
   ['pushover_enabled', 'Pushover alerts', 'Instant push to your phone on every edge'],
@@ -17,6 +19,18 @@ const TOGGLES = [
 const NUMBERS = [
   ['stake_per_trade', 'Stake per trade (USD)', 10, 10],
   ['max_exposure_per_match', 'Max exposure per match (USD)', 50, 50],
+];
+
+/* Liquidity and sanity guards. Without these the actionable queue fills with
+   decided matches: a 0/1c quote against a strong favourite is what a withdrawal
+   looks like, and no ratings model can see one. */
+const GUARDS = [
+  ['min_bid_cents', 'Minimum bid (¢)', 0, 1,
+   'Below this nobody is really making a market on this player.'],
+  ['max_spread_cents', 'Maximum spread (¢)', 1, 1,
+   'A wide book means your fill price is not the price the model assumed.'],
+  ['max_edge_cents', 'Maximum believable edge (¢)', 5, 1,
+   'Beyond this the market almost certainly knows something the ratings do not — kept for review, not traded.'],
 ];
 
 export default function Settings({ state, user, onUserChange }) {
@@ -42,6 +56,7 @@ export default function Settings({ state, user, onUserChange }) {
         min_utr_gap: Number(form.min_utr_gap),
         stake_per_trade: Number(form.stake_per_trade),
         max_exposure_per_match: Number(form.max_exposure_per_match),
+        ...Object.fromEntries(GUARDS.map(([k]) => [k, Number(form[k])])),
         ...Object.fromEntries(TOGGLES.map(([k]) => [k, !!form[k]])),
       };
       const r = await api.saveSettings(patch);
@@ -140,6 +155,22 @@ export default function Settings({ state, user, onUserChange }) {
                 value={form[k]}
                 onChange={e => set(k, e.target.value)}
               />
+            </div>
+          ))}
+        </Panel>
+
+        <Panel title="Signal guards">
+          <p className="text-[12.5px] text-muted mb-4.5">
+            Live data showed the model&apos;s biggest disagreements with the market are where it is most
+            likely <i>wrong</i> — a withdrawal or retirement looks exactly like a huge edge. These keep
+            such rows visible for review instead of in the trade queue.
+          </p>
+          {GUARDS.map(([k, label, min, step, help]) => (
+            <div className="fld mb-4.5" key={k}>
+              <Label>{label}</Label>
+              <input type="number" min={min} step={step} value={form[k] ?? ''}
+                onChange={e => set(k, e.target.value)} />
+              <p className="text-[11.5px] text-muted2 mt-1.5">{help}</p>
             </div>
           ))}
         </Panel>

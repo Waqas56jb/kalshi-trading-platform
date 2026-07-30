@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useToast } from '../../Toasts';
 import { ChipBtn, Tag } from '../../common';
 import { usePoll } from '../../../hooks/useApi';
 import { api, fmtPct, fmtTime, fmtUsd } from '../../../lib/api';
@@ -16,12 +17,33 @@ const STATUS_TAG = {
   failed: ['bg-down/15 text-down', 'FAILED'],
 };
 
-export default function Trades() {
+export default function Trades({ user }) {
+  const toast = useToast();
   const [filter, setFilter] = useState('all');
-  const { data, error, loading } = usePoll(() => api.trades(filter), {
+  const [settling, setSettling] = useState(false);
+  const { data, error, loading, refresh } = usePoll(() => api.trades(filter), {
     intervalMs: 15000, deps: [filter],
   });
   const rows = data?.trades ?? [];
+  const isAdmin = user?.role === 'admin';
+
+  /** Asks Kalshi whether any held market has resolved, and books the result. */
+  const settleNow = async () => {
+    setSettling(true);
+    try {
+      const r = await api.reconcileTrades();
+      await refresh({ quiet: true });
+      const n = r.settlement?.settled ?? 0;
+      toast(n ? 'Positions settled' : 'Nothing to settle',
+        n ? `${n} position${n === 1 ? '' : 's'} booked against the Kalshi result.`
+          : `Checked ${r.settlement?.checked ?? 0} open position(s); none have resolved yet.`,
+        n ? 'tup' : '');
+    } catch (e) {
+      toast('Settlement failed', e.message, 'tdown');
+    } finally {
+      setSettling(false);
+    }
+  };
 
   return (
     <div className="animate-page-in">
@@ -29,10 +51,15 @@ export default function Trades() {
         title="Trade history"
         sub="Every execution attempt, fill and settlement on this desk"
         action={
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center flex-wrap">
             {FILTERS.map(([id, label]) => (
               <ChipBtn key={id} on={filter === id} onClick={() => setFilter(id)}>{label}</ChipBtn>
             ))}
+            {isAdmin && (
+              <button className="btn btn-ghost btn-sm ml-1" onClick={settleNow} disabled={settling}>
+                {settling ? 'Settling…' : 'Settle now'}
+              </button>
+            )}
           </div>
         }
       />
@@ -44,7 +71,7 @@ export default function Trades() {
           <table className="tbl">
             <thead>
               <tr>
-                <th>Placed</th><th>Player</th><th>Side</th><th>Entry</th><th>Fair</th>
+                <th>Placed</th><th>Mode</th><th>Player</th><th>Side</th><th>Entry</th><th>Fair</th>
                 <th>Size</th><th>Stake</th><th>EV</th><th>Status</th><th>Result</th><th>P&amp;L</th>
               </tr>
             </thead>
@@ -54,6 +81,11 @@ export default function Trades() {
                 return (
                   <tr key={t.id} title={t.error ?? undefined}>
                     <td className="font-mono text-muted">{fmtTime(t.placed_at)}</td>
+                    <td>
+                      {t.mode === 'paper'
+                        ? <Tag className="bg-amber/15 text-amber">PAPER</Tag>
+                        : <Tag className="bg-ace-dim text-ace">LIVE</Tag>}
+                    </td>
                     <td>
                       <div className="font-semibold text-[13.5px]">{t.player_name ?? t.ticker}</div>
                       {t.matchup && <div className="text-[11.5px] text-muted2 font-mono mt-0.5">{t.matchup}</div>}

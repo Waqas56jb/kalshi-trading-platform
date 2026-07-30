@@ -1,6 +1,6 @@
 import { fmtNum, fmtPct } from '../../lib/api';
 
-export default function ConfirmModal({ alert, busy, health, onClose, onConfirm }) {
+export default function ConfirmModal({ alert, busy, health, paper, onClose, onConfirm }) {
   if (!alert) return null;
 
   const tradingLive = health?.kalshi?.trading === 'ok';
@@ -24,18 +24,28 @@ export default function ConfirmModal({ alert, busy, health, onClose, onConfirm }
     >
       <div className="w-full max-w-[440px] bg-[linear-gradient(165deg,var(--color-panel2),var(--color-panel))]
                       border border-line2 rounded-[20px] p-7.5 animate-modal-in">
-        <h3 className="font-display text-[19px] font-extrabold mb-1">Confirm execution</h3>
+        <h3 className="font-display text-[19px] font-extrabold mb-1 flex items-center gap-2.5">
+          Confirm execution
+          {paper && (
+            <span className="font-mono text-[10px] tracking-[.1em] bg-amber/20 text-amber px-2 py-1 rounded">
+              PAPER
+            </span>
+          )}
+        </h3>
         <p className="text-muted text-[13.5px] mb-5">
-          A fill-or-kill limit order goes to Kalshi at the ask the moment you confirm. Size is derived
-          from your stake setting and capped by the volume available.
+          {paper
+            ? 'This records a position at the real ask without sending anything to Kalshi. It settles '
+              + 'against the real match result. Size is capped by the volume actually available.'
+            : 'A fill-or-kill limit order goes to Kalshi at the ask the moment you confirm. Size is '
+              + 'derived from your stake setting and capped by the volume available.'}
         </p>
 
-        {!tradingLive && (
+        {!tradingLive && !paper && (
           <div className="mb-4 rounded-[11px] border border-amber/35 bg-amber/8 p-3 text-[12.5px]">
             <b className="text-amber font-display">This will not reach the exchange</b>
             <p className="text-muted mt-1">
-              Kalshi is rejecting the configured API credentials. Confirming records the attempt as
-              <span className="font-mono"> failed</span> in your ledger so nothing is lost, but no order is placed.
+              Kalshi is rejecting the configured API credentials, so this is recorded as a paper
+              position instead of a live order.
             </p>
           </div>
         )}
@@ -58,7 +68,7 @@ export default function ConfirmModal({ alert, busy, health, onClose, onConfirm }
             onClick={() => onConfirm(alert)}
             disabled={busy}
           >
-            {busy ? 'Sending…' : 'Execute sweep ⚡'}
+            {busy ? 'Recording…' : paper ? 'Record paper fill' : 'Execute sweep ⚡'}
           </button>
         </div>
       </div>

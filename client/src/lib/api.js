@@ -100,6 +100,7 @@ export const api = {
   saveSettings: patch => call('PATCH', '/api/settings', patch),
 
   sync: () => call('POST', '/api/sync'),
+  reconcileTrades: () => call('POST', '/api/trades/reconcile'),
 };
 
 export { ApiError };

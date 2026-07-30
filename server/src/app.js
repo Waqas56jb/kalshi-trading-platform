@@ -326,7 +326,10 @@ export function createApp() {
     const wr = await repo.winRate();
     const ev = await repo.evCapturedPerDay(days);
     const pnl = await repo.pnlSeries(days);
-    res.json({ buckets, winRate: wr, evPerDay: ev, pnl });
+    const signalBuckets = await repo.signalsByGapBucket();
+    const edgePerDay = await repo.edgeFoundPerDay(days);
+    const coverage = await repo.pricingCoverage();
+    res.json({ buckets, winRate: wr, evPerDay: ev, pnl, signalBuckets, edgePerDay, coverage });
   }));
 
   api.get('/pnl', requireAuth, h(async (req, res) => {
@@ -371,7 +374,10 @@ export function createApp() {
 
   api.all('/trades/reconcile', h(async (req, res) => {
     if (!requireCronOrAdmin(req, res)) return;
-    res.json(await reconcileTrades(kalshi));
+    const orders = await reconcileTrades(kalshi);
+    // settles both live and paper positions against Kalshi's own result
+    const settlement = await repo.settleResolvedTrades(kalshi);
+    res.json({ orders, settlement });
   }));
 
   app.use('/api', api);

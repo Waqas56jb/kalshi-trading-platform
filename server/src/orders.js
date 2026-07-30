@@ -113,15 +113,31 @@ export async function executeAlert(kalshi, alertId, { sizeOverride } = {}) {
   };
 
   const auth = await checkKalshiAuth(kalshi);
-  if (!auth.ok) {
+
+  /**
+   * Paper fill.
+   *
+   * Taken when paper mode is on, and forced when Kalshi will not accept the
+   * credentials — recording a labelled paper position is more useful than a row
+   * that only says "failed", and it never claims an order was sent. Price and
+   * size are the real ask and the real depth at that ask.
+   */
+  if (settings.paper_trading || !auth.ok) {
     const trade = await insertTrade({
-      ...base, status: 'failed',
-      error: `Kalshi credentials rejected (${auth.status ?? '401'}): ${auth.error}`,
+      ...base,
+      mode: 'paper',
+      status: 'filled',
+      filled_at: new Date().toISOString(),
+      error: auth.ok ? null
+        : `Paper fill — Kalshi credentials rejected (${auth.status ?? '401'}): ${auth.error}`,
     });
+    await resolveAlert(alertId, 'executed');
     return {
-      ok: false, code: 'kalshi_auth_failed', trade,
-      message: 'Order not sent — Kalshi rejected the API credentials. Fix the key pair to enable execution.',
-      detail: auth.error,
+      ok: true, paper: true, trade,
+      message: auth.ok
+        ? `Paper fill: ${contracts.toLocaleString()} contracts at ${priceCents}¢. No order was sent.`
+        : `Recorded as a paper fill — Kalshi rejected the API credentials, so no order could be sent.`,
+      kalshiAuthOk: auth.ok,
     };
   }
 

@@ -37,6 +37,29 @@ export function AuthNotice({ health }) {
   );
 }
 
+/** Paper mode must never be mistaken for live execution. */
+export function PaperNotice({ kalshiOk }) {
+  return (
+    <div className="mb-5 rounded-card border border-amber/35 bg-amber/8 p-4 flex gap-3.5 items-start">
+      <span className="font-mono text-[10px] tracking-[.1em] bg-amber/20 text-amber px-2 py-1 rounded mt-0.5 shrink-0">
+        PAPER
+      </span>
+      <div className="text-[13.5px]">
+        <b className="font-display text-amber">Paper trading — no orders reach the exchange</b>
+        <p className="text-muted mt-1">
+          Approving an alert records a position at the <b>real</b> ask, capped by the volume actually
+          available, and settles against Kalshi&apos;s own result once the match finishes. The prices and
+          outcomes are real; only the order is simulated.
+          {!kalshiOk && ' Live execution stays unavailable until Kalshi accepts the API credentials.'}
+        </p>
+        <p className="text-muted2 text-[12.5px] mt-1.5">
+          Turn this off in Settings → Strategy once a working key pair is in place.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function ErrorBox({ error, onRetry }) {
   return (
     <div className="mb-5 rounded-card border border-down/40 bg-down/8 p-4 flex gap-3.5 items-start">

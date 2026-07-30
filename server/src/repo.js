@@ -141,16 +141,67 @@ export async function insertTrade(tr) {
     `insert into ${t('trades')}
        (kalshi_order_id, client_order_id, ticker, event_ticker, player_name, matchup,
         side, action, entry_cents, fair_cents, size_contracts, stake_usd, ev_pct,
-        status, error, raw)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        status, error, raw, mode, filled_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
      returning *`,
     [tr.kalshi_order_id ?? null, tr.client_order_id ?? null, tr.ticker, tr.event_ticker ?? null,
       tr.player_name ?? null, tr.matchup ?? null, tr.side ?? 'yes', tr.action ?? 'buy',
       tr.entry_cents ?? null, tr.fair_cents ?? null, tr.size_contracts ?? null,
       tr.stake_usd ?? null, tr.ev_pct ?? null, tr.status ?? 'pending',
-      tr.error ?? null, tr.raw ? JSON.stringify(tr.raw) : null],
+      tr.error ?? null, tr.raw ? JSON.stringify(tr.raw) : null,
+      tr.mode ?? 'live', tr.filled_at ?? null],
   );
   return r.rows[0];
+}
+
+/**
+ * Settles filled positions whose Kalshi market has resolved.
+ *
+ * The outcome comes from Kalshi's own `result` on the market, so a paper P&L is
+ * computed from what actually happened on court — only the order was simulated.
+ * A YES contract pays $1 if it wins and $0 if it loses.
+ */
+export async function settleResolvedTrades(kalshi, { limit = 40 } = {}) {
+  const open = await query(
+    `select distinct on (tr.ticker) tr.id, tr.ticker, tr.side, tr.entry_cents, tr.size_contracts
+     from ${t('trades')} tr
+     where tr.status in ('filled','partial') and tr.result is null
+     order by tr.ticker, tr.id
+     limit $1`, [limit]);
+
+  let settled = 0;
+  const errors = [];
+
+  for (const row of open.rows) {
+    let market;
+    try {
+      const r = await kalshi.getMarket(row.ticker);
+      market = r?.market ?? r;
+    } catch (e) {
+      errors.push(`${row.ticker}: ${e.message.slice(0, 80)}`);
+      continue;
+    }
+    const status = market?.status;
+    const result = market?.result;
+    if (!result || !['settled', 'finalized', 'closed'].includes(status)) continue;   // still live
+
+    // YES pays 100c on 'yes'; NO pays 100c on 'no'
+    const won = (row.side === 'yes' && result === 'yes') || (row.side === 'no' && result === 'no');
+    const payoutCents = won ? 100 : 0;
+    const size = Number(row.size_contracts ?? 0);
+    const pnl = ((payoutCents - Number(row.entry_cents ?? 0)) * size) / 100;
+
+    const upd = await query(
+      `update ${t('trades')} set status = 'settled', result = $2, settle_result = $3,
+         settled_price_cents = $4, pnl_usd = $5, settled_at = now()
+       where ticker = $1 and status in ('filled','partial') and result is null
+       returning id`,
+      [row.ticker, won ? 'won' : 'lost', result, payoutCents, pnl.toFixed(2)],
+    );
+    settled += upd.rowCount ?? 0;
+  }
+
+  return { checked: open.rowCount ?? 0, settled, errors: errors.slice(0, 5) };
 }
 
 /* ---------------------------------------------------------------- analytics */
@@ -256,6 +307,19 @@ export async function overviewStats() {
     () => query(`select count(*)::int n from ${t('alerts')} where status = 'open'`),
   ]);
 
+  /* Desk metrics that exist from the first sync, before any trade has settled.
+     Without these the dashboard is four em-dashes on a brand-new install even
+     though hundreds of real markets are being priced. */
+  const desk = await query(
+    `select
+       coalesce(sum(greatest(s.fair_cents - s.market_cents, 0)) filter (where s.is_actionable), 0)::int as edge_cents_available,
+       coalesce(max(s.fair_cents - s.market_cents) filter (where s.is_actionable), 0)::int as best_edge_cents,
+       coalesce(round(avg(s.ev_pct) filter (where s.is_actionable), 1), 0)::numeric as avg_actionable_ev,
+       count(*) filter (where s.is_actionable)::int as actionable
+     from ${t('signals')} s
+     join ${t('markets')} m on m.ticker = s.ticker
+     where m.status in ('active','open','initialized')`);
+
   const tr = trades.rows[0];
   const settled = tr.settled;
   return {
@@ -270,7 +334,66 @@ export async function overviewStats() {
     hit_rate: settled > 0 ? Math.round((tr.won / settled) * 100) : null,
     markets: mkts,
     open_alerts: alerts.rows[0].n,
+    desk: {
+      edge_cents_available: desk.rows[0].edge_cents_available,
+      best_edge_cents: desk.rows[0].best_edge_cents,
+      avg_actionable_ev: Number(desk.rows[0].avg_actionable_ev),
+      actionable: desk.rows[0].actionable,
+    },
   };
+}
+
+/**
+ * Signals grouped by UTR gap. Unlike the P&L-by-bucket view this needs no
+ * settled trades, so the analytics page has real content from day one.
+ */
+export async function signalsByGapBucket() {
+  const r = await query(
+    `select case
+              when abs(s.utr_gap) >= 2.0 then 'Δ2.0+'
+              when abs(s.utr_gap) >= 1.5 then 'Δ1.5–1.9'
+              when abs(s.utr_gap) >= 1.0 then 'Δ1.0–1.4'
+              when abs(s.utr_gap) >= 0.5 then 'Δ0.5–0.9'
+              else 'Δ0–0.4'
+            end as bucket,
+            count(*)::int as signals,
+            count(*) filter (where s.is_actionable)::int as actionable,
+            coalesce(round(avg(s.fair_cents - s.market_cents), 1), 0)::numeric as avg_edge_cents
+     from ${t('signals')} s
+     join ${t('markets')} m on m.ticker = s.ticker
+     where m.status in ('active','open','initialized')
+     group by bucket order by bucket`);
+  return r.rows.map(x => ({ ...x, avg_edge_cents: Number(x.avg_edge_cents) }));
+}
+
+/** Edge the model has surfaced per day, measured from recorded signals. */
+export async function edgeFoundPerDay(days = 30) {
+  const r = await query(
+    `with d as (
+       select generate_series(
+         (current_date - ($1::int - 1) * interval '1 day')::date,
+         current_date, interval '1 day')::date as day
+     )
+     select d.day,
+            count(a.id)::int as alerts,
+            coalesce(sum(greatest(a.fair_cents - a.market_cents, 0)), 0)::int as edge_cents
+     from d
+     left join ${t('alerts')} a on a.created_at::date = d.day
+     group by d.day order by d.day`, [days]);
+  return r.rows;
+}
+
+/** Split of markets the model can and cannot price — explains coverage gaps. */
+export async function pricingCoverage() {
+  const r = await query(
+    `select
+       count(*)::int as total,
+       count(s.ticker)::int as priced,
+       count(*) filter (where s.is_actionable)::int as actionable
+     from ${t('markets')} m
+     left join ${t('signals')} s on s.ticker = m.ticker
+     where m.status in ('active','open','initialized')`);
+  return r.rows[0];
 }
 
 /* ----------------------------------------------------------------- settings */
@@ -283,7 +406,8 @@ export async function getSettings() {
 const SETTABLE = new Set([
   'min_ev_threshold', 'stake_per_trade', 'max_exposure_per_match', 'min_utr_gap',
   'manual_approval', 'sweep_full_volume', 'pushover_enabled', 'sms_fallback',
-  'inplay_enabled', 'bot_enabled',
+  'inplay_enabled', 'bot_enabled', 'paper_trading',
+  'min_bid_cents', 'max_spread_cents', 'max_edge_cents',
 ]);
 
 export async function updateSettings(patch) {

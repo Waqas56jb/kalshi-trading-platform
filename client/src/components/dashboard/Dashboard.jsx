@@ -72,8 +72,9 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
       const r = await api.executeAlert(alert.id);
       setModalAlert(null);
       await alerts.refresh({ quiet: true });
-      toast('Order filled ⚡',
-        `${r.trade.size_contracts} contracts on ${r.trade.player_name} @ ${r.trade.entry_cents}¢.`, 'tup');
+      toast(r.paper ? 'Paper position opened' : 'Order filled ⚡',
+        r.message ?? `${r.trade.size_contracts} contracts on ${r.trade.player_name} @ ${r.trade.entry_cents}¢.`,
+        'tup');
     } catch (e) {
       setModalAlert(null);
       const detail = e.body?.detail ?? e.message;
@@ -106,7 +107,12 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
 
         <div className="p-[clamp(16px,2.5vw,30px)] max-w-[1440px] w-full mx-auto">
           {page === 'overview' && (
-            <Overview alerts={openAlerts} health={h} onPage={goPage} onTrade={setModalAlert} />
+            <Overview
+              alerts={openAlerts} health={h} user={user}
+              settings={settings.data?.settings ?? null}
+              onPage={goPage} onTrade={setModalAlert}
+              onRefresh={() => alerts.refresh({ quiet: true })}
+            />
           )}
           {page === 'markets' && <Markets search={query} onTrade={setModalAlert} />}
           {page === 'alerts' && (
@@ -115,7 +121,7 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
               onTrade={setModalAlert} health={h}
             />
           )}
-          {page === 'trades' && <Trades />}
+          {page === 'trades' && <Trades user={user} />}
           {page === 'analytics' && <Analytics />}
           {page === 'settings' && (
             <Settings state={settings} user={user} onUserChange={onUserChange} />
@@ -125,6 +131,7 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
 
       <ConfirmModal
         alert={modalAlert} busy={executing} health={h}
+        paper={settings.data?.settings?.paper_trading ?? true}
         onClose={() => setModalAlert(null)} onConfirm={confirmExecute}
       />
     </div>

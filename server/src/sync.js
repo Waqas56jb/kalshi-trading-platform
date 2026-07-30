@@ -190,34 +190,87 @@ async function computeSignals(client, rows, settings) {
 
   const minEv = Number(settings.min_ev_threshold);
   const minGap = Number(settings.min_utr_gap);
+  const minBid = Number(settings.min_bid_cents ?? 5);
+  const maxSpread = Number(settings.max_spread_cents ?? 12);
+  const maxEdge = Number(settings.max_edge_cents ?? 25);
+
+  const byTicker = new Map(rows.map(r => [r.ticker, r]));
+
+  /**
+   * Decides whether a priced signal is safe to act on, and records why not.
+   *
+   * The market is treated as the better-informed party when it disagrees
+   * violently: a ratings model cannot see a withdrawal, an injury or a
+   * retirement, and those are exactly what a 0/1c quote against a strong
+   * favourite looks like.
+   */
+  const review = s => {
+    const m = byTicker.get(s.ticker);
+    const bid = m?.yes_bid_cents ?? null;
+    const ask = m?.yes_ask_cents ?? null;
+    const edge = s.fair_cents - s.market_cents;
+
+    if (s.ev_pct == null || s.ev_pct < minEv) return 'below_ev_threshold';
+    if (Math.abs(s.utr_gap ?? 0) < minGap) return 'utr_gap_too_small';
+    if (bid == null || bid < minBid) return 'no_real_bid';
+    if (ask != null && bid != null && ask - bid > maxSpread) return 'spread_too_wide';
+    if (edge > maxEdge) return 'market_disagrees_strongly';
+    return null;                                     // actionable
+  };
+
+  for (const s of rated) s.review_reason = review(s);
   const col = f => rated.map(f);
 
   await client.query(
     `insert into ${t('signals')}
        (ticker, event_ticker, player_name, opponent_name, player_utr, opponent_utr,
-        utr_gap, fair_cents, market_cents, ev_pct, model, is_actionable, computed_at)
+        utr_gap, fair_cents, market_cents, ev_pct, model, is_actionable, review_reason, computed_at)
      select *, now() from unnest(
        $1::text[], $2::text[], $3::text[], $4::text[], $5::numeric[], $6::numeric[],
-       $7::numeric[], $8::int[], $9::int[], $10::numeric[], $11::text[], $12::boolean[])
+       $7::numeric[], $8::int[], $9::int[], $10::numeric[], $11::text[], $12::boolean[], $13::text[])
      on conflict (ticker) do update set
        event_ticker = excluded.event_ticker, player_name = excluded.player_name,
        opponent_name = excluded.opponent_name, player_utr = excluded.player_utr,
        opponent_utr = excluded.opponent_utr, utr_gap = excluded.utr_gap,
        fair_cents = excluded.fair_cents, market_cents = excluded.market_cents,
        ev_pct = excluded.ev_pct, model = excluded.model,
-       is_actionable = excluded.is_actionable, computed_at = now()`,
+       is_actionable = excluded.is_actionable, review_reason = excluded.review_reason,
+       computed_at = now()`,
     [
       col(s => s.ticker), col(s => s.event_ticker), col(s => s.player_name),
       col(s => s.opponent_name), col(s => s.player_utr), col(s => s.opponent_utr),
       col(s => s.utr_gap), col(s => s.fair_cents), col(s => s.market_cents),
       col(s => s.ev_pct), col(s => s.model),
-      col(s => s.ev_pct != null && s.ev_pct >= minEv && Math.abs(s.utr_gap ?? 0) >= minGap),
+      col(s => s.review_reason === null),
+      col(s => s.review_reason),
     ],
   );
 
+  /* Signals whose market was not in this batch are stale.
+     The sync only fetches open markets, so a ticker that stops appearing has
+     closed or settled. Leaving its old flags in place kept decided matches in the
+     actionable queue indefinitely — that is how a 0/1c quote on a finished match
+     survived every guard. */
+  const stale = await client.query(
+    `update ${t('signals')} set is_actionable = false, review_reason = 'market_no_longer_open',
+       computed_at = now()
+     where is_actionable and ticker <> all($1::text[])
+     returning ticker`,
+    [rows.map(r => r.ticker)],
+  );
+
+  const counts = {};
+  for (const s of rated) {
+    const k = s.review_reason ?? 'actionable';
+    counts[k] = (counts[k] ?? 0) + 1;
+  }
+  if (stale.rowCount) counts.market_no_longer_open = stale.rowCount;
+
   return {
     computed: rated.length,
-    actionable: rated.filter(s => s.ev_pct != null && s.ev_pct >= minEv).length,
+    actionable: rated.filter(s => s.review_reason === null).length,
+    staled: stale.rowCount ?? 0,
+    reasons: counts,
   };
 }
 

@@ -3,12 +3,16 @@
  * there is no local sample data anywhere in the frontend.
  */
 /**
- * In production the API is served from /api on the same origin, so the base is
- * empty and every path is relative. Locally the backend runs on its own port,
- * which client/.env supplies via VITE_API_URL.
+ * Where the backend lives.
+ *
+ * VITE_API_URL is baked in at build time. The frontend and backend are deployed
+ * as two separate Vercel projects, so this must be set on the frontend project
+ * or requests fall back to this origin — where no /api exists — and 404.
  */
 const BASE = (import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:8787' : ''))
   .replace(/\/$/, '');
+
+export const API_BASE_CONFIGURED = Boolean(import.meta.env.VITE_API_URL);
 
 class ApiError extends Error {
   constructor(message, status, body) {
@@ -28,7 +32,11 @@ async function call(method, path, body) {
     });
   } catch (e) {
     throw new ApiError(
-      `Cannot reach the API at ${BASE || window.location.origin}. Is the server running?`, 0, null);
+      API_BASE_CONFIGURED
+        ? `Cannot reach the API at ${BASE}. Is the backend running and is this origin allowed by CORS?`
+        : 'VITE_API_URL is not set, so there is no backend to call. Set it on this '
+          + 'deployment to your backend URL and redeploy.',
+      0, null);
   }
 
   const text = await res.text();

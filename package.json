@@ -2,22 +2,14 @@
   "name": "kalshi-trading-platform",
   "private": true,
   "version": "1.0.0",
-  "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
-  "description": "Root manifest for the Vercel deployment. The serverless function in api/ imports the Express app from server/, so the server's runtime dependencies must resolve from here.",
+  "description": "Workspace scripts only. client/ and server/ are deployed as two independent Vercel projects and each carries its own dependencies.",
   "scripts": {
-    "build": "cd client && npm run build",
     "dev": "cd server && npm run dev",
     "dev:client": "cd client && npm run dev",
+    "build": "cd client && npm run build",
     "verify": "cd server && npm run verify",
-    "db:push": "cd server && npm run db:push"
-  },
-  "dependencies": {
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.3",
-    "express": "^5.1.0",
-    "pg": "^8.16.3"
+    "sync": "cd server && npm run sync",
+    "db:push": "cd server && npm run db:push",
+    "ratings": "cd server && node cli/ratings.js"
   }
 }

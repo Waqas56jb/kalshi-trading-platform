@@ -1,9 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "cd client && npm ci --include=dev && npm run build",
-  "outputDirectory": "client/dist",
-  "installCommand": "npm install",
   "framework": null,
+  "buildCommand": "echo 'no build step — serverless functions only'",
+  "installCommand": "npm install --omit=dev",
 
   "functions": {
     "api/index.js": {
@@ -14,7 +13,7 @@
 
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/", "destination": "/api/index" }
   ],
 
   "crons": [

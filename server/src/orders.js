@@ -203,3 +203,105 @@ export async function reconcileTrades(kalshi) {
   }
   return { reconciled: n };
 }
+
+/**
+ * Closes an open position.
+ *
+ * A paper position books out at the current bid — the price a seller would
+ * actually get. A live one sends a sell order for the contracts held. Either way
+ * the row records the exit price and why it was closed, so the ledger explains
+ * itself later.
+ */
+export async function closePosition(kalshi, tradeId, { reason = 'manual' } = {}) {
+  const r = await query(
+    `select * from ${t('trades')} where id = $1 and status in ('filled','partial')`, [tradeId]);
+  const trade = r.rows[0];
+  if (!trade) return { ok: false, code: 'not_open', message: 'That position is not open.' };
+
+  const mk = await query(
+    `select yes_bid_cents, yes_ask_cents, player_name from ${t('markets')} where ticker = $1`,
+    [trade.ticker]);
+  const exit = mk.rows[0]?.yes_bid_cents;
+  if (exit == null) {
+    return { ok: false, code: 'no_bid', message: 'No bid available to sell into right now.' };
+  }
+
+  const size = Number(trade.size_contracts ?? 0);
+  const pnl = ((exit - Number(trade.entry_cents ?? 0)) * size) / 100;
+
+  if (trade.mode === 'paper') {
+    const upd = await query(
+      `update ${t('trades')} set status = 'settled', exit_cents = $2, exit_reason = $3,
+         pnl_usd = $4::numeric,
+         result = case when $4::numeric > 0 then 'won'
+                       when $4::numeric < 0 then 'lost' else 'void' end,
+         closed_at = now(), settled_at = now()
+       where id = $1 returning *`,
+      [tradeId, exit, reason, pnl.toFixed(2)],
+    );
+    return {
+      ok: true, paper: true, trade: upd.rows[0],
+      message: `Paper position closed at ${exit}¢ — ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}.`,
+    };
+  }
+
+  const auth = await checkKalshiAuth(kalshi);
+  if (!auth.ok) {
+    return { ok: false, code: 'kalshi_auth_failed', message: 'Kalshi rejected the credentials.', detail: auth.error };
+  }
+
+  try {
+    const res = await kalshi.createOrder({
+      action: 'sell', side: trade.side ?? 'yes', ticker: trade.ticker,
+      type: 'limit', count: size, yes_price: exit,
+      client_order_id: crypto.randomUUID(), time_in_force: 'fill_or_kill',
+    });
+    const upd = await query(
+      `update ${t('trades')} set status = 'settled', exit_cents = $2, exit_reason = $3,
+         pnl_usd = $4::numeric,
+         result = case when $4::numeric > 0 then 'won'
+                       when $4::numeric < 0 then 'lost' else 'void' end,
+         closed_at = now(), settled_at = now(), raw = $5
+       where id = $1 returning *`,
+      [tradeId, exit, reason, pnl.toFixed(2), JSON.stringify(res)],
+    );
+    return { ok: true, trade: upd.rows[0], message: `Sold ${size} contracts at ${exit}¢.` };
+  } catch (e) {
+    return {
+      ok: false, code: 'sell_rejected',
+      message: 'Kalshi rejected the sell order.',
+      detail: String(e.body?.error?.message ?? e.message).slice(0, 300),
+    };
+  }
+}
+
+/**
+ * Closes positions whose bid has reached the modelled fair value.
+ *
+ * The point of the strategy is the gap between price and fair value; once the
+ * market has closed that gap there is nothing left to hold for, and continuing to
+ * hold is just taking match risk for no edge.
+ */
+export async function autoSellAtFair(kalshi) {
+  const cfg = await query(`select auto_sell_at_fair, auto_sell_buffer_cents from ${t('settings')} where id = 1`);
+  if (!cfg.rows[0]?.auto_sell_at_fair) return { enabled: false, closed: 0 };
+  const buffer = Number(cfg.rows[0].auto_sell_buffer_cents ?? 0);
+
+  const due = await query(
+    `select tr.id, tr.player_name, tr.fair_cents, m.yes_bid_cents
+     from ${t('trades')} tr
+     join ${t('markets')} m on m.ticker = tr.ticker
+     where tr.status in ('filled','partial')
+       and tr.fair_cents is not null and m.yes_bid_cents is not null
+       and m.yes_bid_cents >= tr.fair_cents - $1
+     limit 25`,
+    [buffer],
+  );
+
+  const closed = [];
+  for (const row of due.rows) {
+    const out = await closePosition(kalshi, row.id, { reason: 'auto_fair_value' });
+    if (out.ok) closed.push({ id: row.id, player: row.player_name, exit: out.trade.exit_cents });
+  }
+  return { enabled: true, checked: due.rowCount, closed: closed.length, positions: closed };
+}

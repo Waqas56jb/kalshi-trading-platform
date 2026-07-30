@@ -21,6 +21,7 @@ export default function Trades({ user }) {
   const toast = useToast();
   const [filter, setFilter] = useState('all');
   const [settling, setSettling] = useState(false);
+  const [closing, setClosing] = useState(null);
   const { data, error, loading, refresh } = usePoll(() => api.trades(filter), {
     intervalMs: 15000, deps: [filter],
   });
@@ -44,6 +45,22 @@ export default function Trades({ user }) {
       setSettling(false);
     }
   };
+
+  /** Sells the position at the current bid — a click, as the trader asked. */
+  const close = async t => {
+    setClosing(t.id);
+    try {
+      const r = await api.closePosition(t.id);
+      await refresh({ quiet: true });
+      toast('Position closed', r.message, 'tup');
+    } catch (e) {
+      toast('Could not close', e.message, 'tdown');
+    } finally {
+      setClosing(null);
+    }
+  };
+
+  const isOpen = t => ['filled', 'partial'].includes(t.status);
 
   return (
     <div className="animate-page-in">
@@ -72,7 +89,7 @@ export default function Trades({ user }) {
             <thead>
               <tr>
                 <th>Placed</th><th>Mode</th><th>Player</th><th>Side</th><th>Entry</th><th>Fair</th>
-                <th>Size</th><th>Stake</th><th>EV</th><th>Status</th><th>Result</th><th>P&amp;L</th>
+                <th>Size</th><th>Stake</th><th>Exit</th><th>Status</th><th>Result</th><th>P&amp;L</th><th />
               </tr>
             </thead>
             <tbody>
@@ -95,7 +112,7 @@ export default function Trades({ user }) {
                     <td className="font-mono font-semibold text-ace">{t.fair_cents != null ? `${t.fair_cents}¢` : '—'}</td>
                     <td className="font-mono">{t.size_contracts ?? '—'}</td>
                     <td className="font-mono">{fmtUsd(t.stake_usd)}</td>
-                    <td className="font-mono font-bold text-up">{fmtPct(t.ev_pct)}</td>
+                    <td className="font-mono">{t.exit_cents != null ? `${t.exit_cents}¢` : '—'}</td>
                     <td><Tag className={cls}>{label}</Tag></td>
                     <td>
                       {t.result === 'won' && <Tag className="bg-up/12 text-up">WON</Tag>}
@@ -107,6 +124,21 @@ export default function Trades({ user }) {
                       Number(t.pnl_usd) > 0 ? 'text-up' : Number(t.pnl_usd) < 0 ? 'text-down' : ''
                     }`}>
                       {t.status === 'settled' ? fmtUsd(t.pnl_usd, { sign: true }) : '—'}
+                    </td>
+                    <td>
+                      {isOpen(t) && (
+                        <button
+                          className="btn btn-danger btn-sm"
+                          onClick={() => close(t)}
+                          disabled={closing === t.id}
+                          title="Sell this position at the current bid"
+                        >
+                          {closing === t.id ? 'Closing…' : 'Close'}
+                        </button>
+                      )}
+                      {t.exit_reason === 'auto_fair_value' && (
+                        <Tag className="bg-ace-dim text-ace">AUTO</Tag>
+                      )}
                     </td>
                   </tr>
                 );

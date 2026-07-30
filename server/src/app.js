@@ -4,7 +4,11 @@ import { config, configErrors } from './config.js';
 import { ping } from './db.js';
 import { clientFromEnv } from './kalshi.js';
 import { runSync, reapStaleRuns } from './sync.js';
-import { checkKalshiAuth, executeAlert, getAuthState, reconcileTrades, snapshotPortfolio } from './orders.js';
+import {
+  autoSellAtFair, checkKalshiAuth, closePosition, executeAlert, getAuthState,
+  reconcileTrades, snapshotPortfolio,
+} from './orders.js';
+import { probe as probeSchedule, syncSchedule } from './schedule.js';
 import * as repo from './repo.js';
 import { backfillRatings, ratingsCoverage } from './ratings.js';
 import {
@@ -307,6 +311,29 @@ export function createApp() {
   }));
 
   /* ----------------------------------------------------------------- trades */
+
+  /** Sell out of a position at the current bid. */
+  api.post('/trades/:id/close', requireAuth, h(async (req, res) => {
+    const out = await closePosition(kalshi, Number(req.params.id), { reason: 'manual' });
+    res.status(out.ok ? 200 : 400).json(out);
+  }));
+
+  api.all('/trades/auto-sell', h(async (req, res) => {
+    if (!requireCronOrAdmin(req, res)) return;
+    res.json(await autoSellAtFair(kalshi));
+  }));
+
+  /* -------------------------------------------------------------- schedule --- */
+
+  /** Reports which Sofascore hosts answer from wherever this is deployed. */
+  api.get('/schedule/probe', requireAuth, requireAdmin, h(async (_req, res) => {
+    res.json({ hosts: await probeSchedule(), runtime: process.env.VERCEL ? 'vercel' : 'node' });
+  }));
+
+  api.all('/schedule/sync', h(async (req, res) => {
+    if (!requireCronOrAdmin(req, res)) return;
+    res.json(await syncSchedule({ date: req.query.date }));
+  }));
 
   api.get('/trades', requireAuth, h(async (req, res) => {
     res.json({ trades: await repo.listTrades({ filter: String(req.query.filter ?? 'all') }) });

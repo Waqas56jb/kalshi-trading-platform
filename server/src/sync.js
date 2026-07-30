@@ -1,4 +1,5 @@
 import { config, t } from './config.js';
+import { syncSchedule } from './schedule.js';
 import { query, tx } from './db.js';
 import {
   buildSignalsForEvent, classifySchedule, dayIn, dollarsToCents, looksInPlay,
@@ -225,6 +226,7 @@ async function computeSignals(client, rows, settings) {
   const minBid = Number(settings.min_bid_cents ?? 5);
   const maxSpread = Number(settings.max_spread_cents ?? 12);
   const maxEdge = Number(settings.max_edge_cents ?? 25);
+  const minEdge = Number(settings.min_edge_cents ?? 15);
   const prematchOnly = settings.prematch_only !== false;
   const leadMs = Number(settings.alert_lead_minutes ?? 10) * 60_000;
   const maxAheadMs = Number(settings.alert_max_hours ?? 72) * 3_600_000;
@@ -249,6 +251,9 @@ async function computeSignals(client, rows, settings) {
     const ask = m?.yes_ask_cents ?? null;
     const edge = s.fair_cents - s.market_cents;
 
+    /* Absolute edge first. Percentage EV inflates on cheap contracts — a 3c edge
+       on a 1c ask reads as +300% — so the cents floor is the meaningful filter. */
+    if (edge < minEdge) return 'edge_too_small';
     if (s.ev_pct == null || s.ev_pct < minEv) return 'below_ev_threshold';
     if (Math.abs(s.utr_gap ?? 0) < minGap) return 'utr_gap_too_small';
     if (bid == null || bid < minBid) return 'no_real_bid';
@@ -437,6 +442,10 @@ export async function runSync(kalshi, { verbose = false } = {}) {
   const runId = run.rows[0].id;
 
   try {
+    /* Refresh real start times first so the pre-match gate can use them. Failure
+       is not fatal: the desk falls back to order-book inference. */
+    await syncSchedule().catch(() => null);
+
     const st = await query(`select * from ${t('settings')} where id = 1`);
     const settings = st.rows[0];
     const series = settings.series_tickers?.length ? settings.series_tickers : config.sync.seriesTickers;

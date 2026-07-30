@@ -462,6 +462,7 @@ const SETTABLE = new Set([
   'min_bid_cents', 'max_spread_cents', 'max_edge_cents', 'inplay_volume_threshold',
   'prematch_only', 'alert_lead_minutes', 'alert_max_hours', 'sound_enabled',
   'display_timezone', 'odds_divergence_cents', 'odds_alerts_enabled',
+  'min_edge_cents', 'auto_sell_at_fair', 'auto_sell_buffer_cents',
 ]);
 
 export async function updateSettings(patch) {

@@ -101,6 +101,8 @@ export const api = {
 
   sync: () => call('POST', '/api/sync'),
   reconcileTrades: () => call('POST', '/api/trades/reconcile'),
+  closePosition: id => call('POST', `/api/trades/${id}/close`),
+  scheduleProbe: () => get('/api/schedule/probe'),
 };
 
 export { ApiError };

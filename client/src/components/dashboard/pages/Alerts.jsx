@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Tag } from '../../common';
 import { notificationsAllowed, requestNotificationPermission, soundUnlocked, unlockSound, playAlertChime } from '../../../lib/alertSound';
-import { api, fmtNum, fmtPct, fmtTime } from '../../../lib/api';
+import { api, fmtCountdown, fmtMatchTime, fmtNum, fmtPct, fmtTime, localZone } from '../../../lib/api';
 import { PageHead } from '../PageHead';
 import { AuthNotice, Empty, ErrorBox, Loading } from '../Notices';
 
@@ -15,10 +15,10 @@ function Countdown({ iso }) {
   const mins = minutesToStart(iso);
   if (mins == null) return <span className="text-muted2">start time unknown</span>;
   if (mins <= 0) return <span className="text-down">already started</span>;
-  const h = Math.floor(mins / 60);
   return (
-    <span className={mins <= 30 ? 'text-amber' : 'text-muted'}>
-      starts in {h ? `${h}h ${mins % 60}m` : `${mins}m`}
+    <span className={mins <= 30 ? 'text-amber' : 'text-muted'} title={new Date(iso).toString()}>
+      <b className="text-text font-semibold">{fmtMatchTime(iso)}</b>
+      {' · '}{fmtCountdown(iso)}
     </span>
   );
 }
@@ -43,8 +43,9 @@ export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health
       <PageHead
         title="Mispricing alerts"
         sub={settings?.prematch_only !== false
-          ? `Pre-match only · at least ${settings?.alert_lead_minutes ?? 10} minutes before first serve`
-          : 'Opportunities above your EV threshold — approve to execute'}
+          ? `Pre-match only · at least ${settings?.alert_lead_minutes ?? 10} min before the scheduled slot`
+            + ` · times in ${localZone()}`
+          : `Opportunities above your EV threshold · times in ${localZone()}`}
         action={
           <div className="flex gap-2.5 items-center">
             {!alertsOn && (

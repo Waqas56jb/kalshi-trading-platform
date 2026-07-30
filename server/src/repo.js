@@ -21,7 +21,7 @@ async function series(thunks) {
  * Live markets joined to their model output.
  * `filter`: all | mispriced | inplay | rated
  */
-export async function listMarkets({ filter = 'all', search = '', limit = 200 } = {}) {
+export async function listMarkets({ filter = 'all', search = '', limit = 200, sort = 'edge' } = {}) {
   const r = await query(
     `select m.ticker, m.event_ticker, m.series_ticker, m.player_name, m.status,
             m.yes_bid_cents, m.yes_ask_cents, m.last_price_cents,
@@ -48,9 +48,13 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200 } =
              when 'inplay'    then m.occurrence_datetime <= now()
              else true
            end
-     order by s.ev_pct desc nulls last, m.volume desc nulls last
+     order by
+       case when $4 = 'starts' then m.occurrence_datetime end asc nulls last,
+       case when $4 = 'edge'   then (s.fair_cents - s.market_cents) end desc nulls last,
+       case when $4 = 'ev'     then s.ev_pct end desc nulls last,
+       m.volume desc nulls last
      limit $3`,
-    [search, filter, limit],
+    [search, filter, limit, sort],
   );
   return r.rows;
 }

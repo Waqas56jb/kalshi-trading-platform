@@ -266,10 +266,12 @@ export function createApp() {
   /* ---------------------------------------------------------------- markets */
 
   api.get('/markets', requireAuth, h(async (req, res) => {
+    const sort = ['edge', 'ev', 'starts'].includes(req.query.sort) ? req.query.sort : 'edge';
     const rows = await repo.listMarkets({
       filter: String(req.query.filter ?? 'all'),
       search: String(req.query.search ?? ''),
       limit: Math.min(Number(req.query.limit) || 200, 500),
+      sort,
     });
     res.json({ markets: rows, count: await repo.marketCount() });
   }));

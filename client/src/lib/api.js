@@ -129,3 +129,48 @@ export const fmtTime = iso => {
   const d = new Date(iso);
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
+
+const clock = d => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
+/**
+ * Scheduled start, in the viewer's own timezone, with the day made explicit so
+ * "14:00" is never ambiguous about which day it means.
+ *
+ * Kalshi publishes a half-hour scheduling slot rather than a first-serve time, so
+ * callers should present this as scheduled rather than exact.
+ */
+export const fmtMatchTime = iso => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+
+  const today = new Date();
+  const midnight = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((midnight(d) - midnight(today)) / 86_400_000);
+
+  if (dayDiff === 0) return clock(d);
+  if (dayDiff === 1) return `Tomorrow ${clock(d)}`;
+  if (dayDiff === -1) return `Yesterday ${clock(d)}`;
+  return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${clock(d)}`;
+};
+
+/** Compact "in 3h 21m" / "started" for the same timestamp. */
+export const fmtCountdown = iso => {
+  if (!iso) return null;
+  const mins = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+  if (Number.isNaN(mins)) return null;
+  if (mins <= 0) return 'started';
+  if (mins < 60) return `in ${mins}m`;
+  const h = Math.floor(mins / 60);
+  if (h < 24) return `in ${h}h ${mins % 60}m`;
+  return `in ${Math.floor(h / 24)}d ${h % 24}h`;
+};
+
+/** The viewer's timezone label, so the times on screen are unambiguous. */
+export const localZone = () => {
+  try {
+    return new Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'local time';
+  } catch {
+    return 'local time';
+  }
+};

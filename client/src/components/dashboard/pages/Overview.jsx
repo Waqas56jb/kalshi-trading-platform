@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ChipBtn, Panel, StatusTag } from '../../common';
 import { usePoll } from '../../../hooks/useApi';
 import { useCanvas } from '../../../hooks/useUi';
-import { api, fmtNum, fmtPct, fmtUsd } from '../../../lib/api';
+import { api, fmtCountdown, fmtMatchTime, fmtNum, fmtPct, fmtUsd } from '../../../lib/api';
 import { drawLineArea } from '../../../lib/charts';
 import { useToast } from '../../Toasts';
 import { PageHead } from '../PageHead';
@@ -185,7 +185,7 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
         <div className="overflow-x-auto">
           <table className="tbl">
             <thead>
-              <tr><th>Match</th><th>UTR Δ</th><th>Fair</th><th>Ask</th><th>Edge</th><th>EV</th><th>Status</th><th /></tr>
+              <tr><th>Match</th><th>Starts</th><th>UTR Δ</th><th>Fair</th><th>Ask</th><th>Edge</th><th>EV</th><th>Status</th><th /></tr>
             </thead>
             <tbody>
               {(hot.data?.markets ?? []).map(m => {
@@ -195,6 +195,14 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
                     <td>
                       <div className="font-semibold text-[13.5px]">{m.player_name}</div>
                       <div className="text-[11.5px] text-muted2 font-mono mt-0.5">{m.tournament ?? m.matchup}</div>
+                    </td>
+                    <td className="font-mono whitespace-nowrap">
+                      {m.occurrence_datetime ? (
+                        <span title={new Date(m.occurrence_datetime).toString()}>
+                          <span className="text-text">{fmtMatchTime(m.occurrence_datetime)}</span>
+                          <span className="block text-[10.5px] text-muted">{fmtCountdown(m.occurrence_datetime)}</span>
+                        </span>
+                      ) : <span className="text-muted2">—</span>}
                     </td>
                     <td className="font-mono font-semibold text-ace">{m.utr_gap != null ? `Δ ${m.utr_gap}` : '—'}</td>
                     <td className="font-mono font-semibold">{m.fair_cents != null ? `${m.fair_cents}¢` : '—'}</td>
@@ -216,7 +224,7 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
                 );
               })}
               {!(hot.data?.markets ?? []).length && (
-                <tr><td colSpan={8} className="text-center text-muted py-8">
+                <tr><td colSpan={9} className="text-center text-muted py-8">
                   {hot.loading ? 'Loading markets…' : 'No mispriced markets above your EV threshold right now.'}
                 </td></tr>
               )}

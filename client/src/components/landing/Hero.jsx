@@ -2,47 +2,46 @@ import { useEffect, useRef, useState } from 'react';
 import { CourtLines, LiveDot } from '../common';
 import { IconArrow } from '../Icons';
 import { useCountUp } from '../../hooks/useUi';
-import { drawLineArea, seriesRandomWalk } from '../../lib/charts';
-import { rnd } from '../../lib/data';
+import { drawLineArea } from '../../lib/charts';
+import { api, fmtPct } from '../../lib/api';
 
-const EDGES = [
-  { p: 'Costa vs. Bergs', gap: '1.2', ev: '+26.0%', tone: 'text-ace', on: true },
-  { p: 'Navone vs. Trungelliti', gap: '0.9', ev: '+14.2%', tone: 'text-up' },
-  { p: 'Kirchheimer vs. Boyer', gap: '0.6', ev: '+9.4%', tone: 'text-up' },
-  { p: 'Vrbensky vs. Forejtek', gap: '0.3', ev: '+2.1%', tone: 'text-muted2' },
-];
+/**
+ * Landing hero. The preview card shows a genuine top-EV market pulled from the
+ * backend, with its real recorded price history. Nothing here is fabricated —
+ * when the API is unreachable the card renders its unknown state instead.
+ */
+export default function Hero({ onLogin, feed }) {
+  const { markets = [], count, loading, error } = feed;
 
-/** Live price chart in the preview card — the only looping motion in the hero,
- *  and it is data, not decoration. */
-function useHeroPrice() {
-  const ref = useRef(null);
-  const [price, setPrice] = useState(61);
+  // headline market = highest EV we can actually price, else deepest book
+  const lead = markets[0] ?? null;
+  const edges = markets.slice(0, 4);
+
+  const chartRef = useRef(null);
+  const [history, setHistory] = useState([]);
 
   useEffect(() => {
-    const data = seriesRandomWalk(46, 58, 0.18, 2.2);
-    let alive = true, raf, timer;
-    const loop = () => {
-      const c = ref.current;
-      if (c && c.offsetParent !== null) {
-        data.push(data[data.length - 1] + rnd(-1.6, 1.9));
-        data.shift();
-        setPrice(Math.max(35, Math.min(92, Math.round(data[data.length - 1]))));
-        drawLineArea(c, data, '#D8F651', 0.2, true, true);
-      }
-      if (alive) raf = requestAnimationFrame(() => { timer = setTimeout(loop, 90); });
-    };
-    loop();
-    return () => { alive = false; cancelAnimationFrame(raf); clearTimeout(timer); };
-  }, []);
+    if (!lead?.ticker) return;
+    let alive = true;
+    api.priceHistory(lead.ticker, 60)
+      .then(r => { if (alive) setHistory((r.history ?? []).map(h => h.mid_cents ?? h.yes_ask_cents)); })
+      .catch(() => { if (alive) setHistory([]); });
+    return () => { alive = false; };
+  }, [lead?.ticker]);
 
-  return { ref, price };
-}
+  useEffect(() => {
+    const c = chartRef.current;
+    if (!c) return;
+    const draw = () => drawLineArea(c, history, '#D8F651', {
+      fillAlpha: 0.2, dot: true, emptyLabel: 'Awaiting ticks',
+    });
+    draw();
+    window.addEventListener('resize', draw, { passive: true });
+    return () => window.removeEventListener('resize', draw);
+  }, [history]);
 
-export default function Hero({ onLogin }) {
-  const { ref: chartRef, price } = useHeroPrice();
-  const markets = useCountUp(184);
-  const latency = useCountUp(90);
-  const hours = useCountUp(24);
+  const marketsTracked = useCountUp(count?.total ?? 0);
+  const priced = useCountUp(count?.priced ?? 0);
 
   return (
     <section
@@ -52,7 +51,6 @@ export default function Hero({ onLogin }) {
                  pt-[calc(72px+clamp(56px,8vw,104px))] pb-[clamp(70px,7vw,104px)]
                  max-sm:pt-[calc(72px+44px)] max-sm:pb-16"
     >
-      {/* photographic backdrop — static */}
       <div className="hero-bg-overlay absolute inset-0 -z-4 overflow-hidden">
         <img
           src="https://images.unsplash.com/photo-1554068865-24cecd4e34b8?auto=format&fit=crop&w=1920&q=72"
@@ -117,9 +115,9 @@ export default function Hero({ onLogin }) {
                      max-sm:gap-x-5 max-sm:gap-y-2.5 max-sm:text-[12.5px]
                      max-[430px]:flex-col max-[430px]:items-center max-[430px]:gap-[9px]"
         >
-          <Proof value={markets} label="markets tracked live" />
-          <Proof value={<>&lt;{latency}<span className="text-ace">ms</span></>} label="alert latency" />
-          <Proof value={`${hours}/7`} label="market surveillance" />
+          <Proof value={error ? '—' : marketsTracked} label="ITF markets tracked live" />
+          <Proof value={error ? '—' : priced} label="priced by the UTR model" />
+          <Proof value="24/7" label="market surveillance" />
         </div>
       </div>
 
@@ -143,10 +141,10 @@ export default function Hero({ onLogin }) {
               <i className="w-[9px] h-[9px] rounded-full bg-line2" />
             </span>
             <span className="font-mono text-[11.5px] text-muted2 tracking-[.07em] overflow-hidden text-ellipsis whitespace-nowrap max-sm:hidden">
-              courtedge · live desk — ITF M25 Santarem
+              courtedge · live desk{lead?.tournament ? ` — ${lead.tournament}` : ''}
             </span>
             <span className="ml-auto font-mono text-[11px] text-ace bg-ace-dim border border-ace/25 py-[5px] px-[11px] rounded-full inline-flex gap-[7px] items-center whitespace-nowrap shrink-0">
-              <LiveDot />MISPRICED
+              <LiveDot />{lead?.is_actionable ? 'MISPRICED' : loading ? 'LOADING' : 'LIVE'}
             </span>
           </div>
 
@@ -155,31 +153,53 @@ export default function Hero({ onLogin }) {
               <div className="font-mono text-[10px] tracking-[.16em] uppercase text-muted2 pt-2.5 px-3 pb-2">
                 Live edges
               </div>
-              {EDGES.map(e => (
+              {edges.length ? edges.map((e, i) => (
                 <div
-                  key={e.p}
+                  key={e.ticker}
                   className={`flex items-center gap-3 py-[11px] px-3 rounded-[10px] min-w-0 transition-colors duration-200 ${
-                    e.on ? 'bg-ace-dim shadow-[inset_2px_0_0_var(--color-ace)]' : 'hover:bg-white/3'
+                    i === 0 ? 'bg-ace-dim shadow-[inset_2px_0_0_var(--color-ace)]' : 'hover:bg-white/3'
                   }`}
                 >
                   <span className="min-w-0 flex-1">
-                    <b className="block text-[13px] font-semibold tracking-[-.01em] overflow-hidden text-ellipsis whitespace-nowrap">{e.p}</b>
-                    <span className="block font-mono text-[10.5px] text-muted2 mt-[3px]">Δ {e.gap} UTR</span>
+                    <b className="block text-[13px] font-semibold tracking-[-.01em] overflow-hidden text-ellipsis whitespace-nowrap">
+                      {e.matchup ?? e.player_name}
+                    </b>
+                    <span className="block font-mono text-[10.5px] text-muted2 mt-[3px]">
+                      {e.utr_gap != null ? `Δ ${Math.abs(e.utr_gap).toFixed(1)} UTR` : e.tour_level ?? 'ITF'}
+                    </span>
                   </span>
-                  <span className={`font-mono text-[13px] font-bold shrink-0 ${e.tone}`}>{e.ev}</span>
+                  <span className={`font-mono text-[13px] font-bold shrink-0 ${
+                    e.ev_pct == null ? 'text-muted2' : e.ev_pct >= 8 ? 'text-ace' : e.ev_pct > 0 ? 'text-up' : 'text-muted2'
+                  }`}>
+                    {e.ev_pct == null ? '—' : fmtPct(e.ev_pct)}
+                  </span>
                 </div>
-              ))}
+              )) : (
+                <div className="px-3 py-6 text-[12.5px] text-muted2">
+                  {loading ? 'Loading live markets…' : 'No markets available'}
+                </div>
+              )}
             </div>
 
             <div className="pt-1 pb-3 min-w-0">
               <div className="flex justify-between items-start gap-3.5 pt-4.5 px-5.5 pb-1 max-sm:py-[15px] max-sm:px-4 max-sm:pb-1">
                 <div>
-                  <div className="font-display font-bold text-[clamp(15px,1.3vw,18px)] tracking-[-.015em]">Costa vs. Bergs</div>
-                  <div className="font-mono text-[11.5px] text-muted mt-1">UTR 14.1 · 12.9 &nbsp;Δ 1.2</div>
+                  <div className="font-display font-bold text-[clamp(15px,1.3vw,18px)] tracking-[-.015em]">
+                    {lead?.matchup ?? (loading ? 'Loading…' : 'No live market')}
+                  </div>
+                  <div className="font-mono text-[11.5px] text-muted mt-1">
+                    {lead?.player_utr != null && lead?.opponent_utr != null
+                      ? `UTR ${lead.player_utr} · ${lead.opponent_utr}  Δ ${Math.abs(lead.utr_gap).toFixed(1)}`
+                      : lead?.tournament ?? '—'}
+                  </div>
                 </div>
                 <div className="text-right shrink-0">
-                  <div className="font-mono text-[clamp(25px,2.3vw,32px)] font-bold text-ace leading-none max-[430px]:text-2xl">{price}¢</div>
-                  <div className="text-[10.5px] text-muted2 tracking-[.08em] mt-[5px]">YES · COSTA</div>
+                  <div className="font-mono text-[clamp(25px,2.3vw,32px)] font-bold text-ace leading-none max-[430px]:text-2xl">
+                    {lead?.yes_ask_cents != null ? `${lead.yes_ask_cents}¢` : '—'}
+                  </div>
+                  <div className="text-[10.5px] text-muted2 tracking-[.08em] mt-[5px]">
+                    {lead?.player_name ? `YES · ${lead.player_name.split(' ').pop().toUpperCase()}` : 'YES'}
+                  </div>
                 </div>
               </div>
 
@@ -188,14 +208,22 @@ export default function Hero({ onLogin }) {
               </div>
 
               <div className="pt-0.5 px-3 max-sm:px-1.5">
-                <Row l="Fair value (UTR model)"><span className="text-ace">87¢</span></Row>
-                <Row l="Market price">{price}¢</Row>
-                <Row l="Expected value">
-                  <span className="bg-up/15 text-up py-[3px] px-2.5 rounded-full text-xs font-bold font-mono whitespace-nowrap">
-                    +26.0% EV
-                  </span>
+                <Row l="Fair value (UTR model)">
+                  <span className="text-ace">{lead?.fair_cents != null ? `${lead.fair_cents}¢` : '—'}</span>
                 </Row>
-                <Row l="Volume at price">1,420 contracts</Row>
+                <Row l="Market ask">{lead?.yes_ask_cents != null ? `${lead.yes_ask_cents}¢` : '—'}</Row>
+                <Row l="Expected value">
+                  {lead?.ev_pct != null ? (
+                    <span className={`py-[3px] px-2.5 rounded-full text-xs font-bold font-mono whitespace-nowrap ${
+                      lead.ev_pct > 0 ? 'bg-up/15 text-up' : 'bg-white/5 text-muted2'
+                    }`}>
+                      {fmtPct(lead.ev_pct)} EV
+                    </span>
+                  ) : <span className="text-muted2">unrated</span>}
+                </Row>
+                <Row l="Volume at ask">
+                  {lead?.yes_ask_size != null ? `${Number(lead.yes_ask_size).toLocaleString()} contracts` : '—'}
+                </Row>
               </div>
             </div>
           </div>

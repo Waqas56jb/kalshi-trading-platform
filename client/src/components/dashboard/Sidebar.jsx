@@ -9,7 +9,14 @@ const NAV = [
   { id: 'analytics', label: 'Analytics', Ic: IconPie },
 ];
 
-export default function Sidebar({ open, page, onPage, onClose, onHome, onLogout, alertCount, botOn, onToggleBot }) {
+export default function Sidebar({
+  open, page, onPage, onClose, onHome, onLogout, alertCount, botOn, onToggleBot, health,
+}) {
+  const tracked = health?.sync?.markets_seen ?? null;
+  const status = !botOn ? 'PAUSED · ALERTS ONLY'
+    : tracked != null ? `SCANNING · ${tracked} MARKETS`
+    : 'STARTING UP…';
+
   return (
     <>
       <div
@@ -51,7 +58,7 @@ export default function Sidebar({ open, page, onPage, onClose, onHome, onLogout,
             </div>
             <div className={`font-mono text-[11px] flex items-center gap-[7px] ${botOn ? 'text-up' : 'text-amber'}`}>
               <span className={`w-[7px] h-[7px] rounded-full shrink-0 ${botOn ? 'bg-up animate-blink' : 'bg-amber'}`} />
-              {botOn ? 'SCANNING · 184 MARKETS' : 'PAUSED · ALERTS ONLY'}
+              {status}
             </div>
           </div>
         </div>

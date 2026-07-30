@@ -1,0 +1,26 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm --prefix client ci && npm --prefix client run build",
+  "outputDirectory": "client/dist",
+  "installCommand": "npm install",
+  "framework": null,
+
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  },
+
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ],
+
+  "crons": [
+    { "path": "/api/sync", "schedule": "* * * * *" },
+    { "path": "/api/ratings/backfill?limit=40", "schedule": "*/30 * * * *" },
+    { "path": "/api/trades/reconcile", "schedule": "*/5 * * * *" },
+    { "path": "/api/portfolio/snapshot", "schedule": "*/15 * * * *" }
+  ]
+}

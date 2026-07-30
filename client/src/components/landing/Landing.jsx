@@ -1,5 +1,7 @@
 import { Logo } from '../common';
 import { useReveal, useScrolled } from '../../hooks/useUi';
+import { usePoll } from '../../hooks/useApi';
+import { api, fmtPct } from '../../lib/api';
 import { IconActivity, IconBell, IconBolt, IconCheck, IconClock, IconLayout } from '../Icons';
 import Hero from './Hero';
 
@@ -26,8 +28,17 @@ const UTR_ROWS = [
   ['Δ 0.0', '~50%', '50¢', false],
 ];
 
-export default function Landing({ onLogin, matches }) {
+export default function Landing({ onLogin }) {
   const scrolled = useScrolled();
+
+  // one fetch feeds both the hero preview and the ticker tape
+  const { data, error, loading } = usePoll(() => api.markets({ limit: 40 }), { intervalMs: 20000 });
+  const feed = {
+    markets: data?.markets ?? [],
+    count: data?.count ?? null,
+    loading,
+    error,
+  };
 
   return (
     <div className="animate-view-in">
@@ -48,9 +59,9 @@ export default function Landing({ onLogin, matches }) {
         </div>
       </header>
 
-      <Hero onLogin={onLogin} />
+      <Hero onLogin={onLogin} feed={feed} />
 
-      <Tape matches={matches} />
+      <Tape markets={feed.markets} />
 
       {/* ===== FEATURES ===== */}
       <Section id="features">
@@ -171,19 +182,33 @@ export default function Landing({ onLogin, matches }) {
   );
 }
 
-function Tape({ matches }) {
+/** Live ticker of real Kalshi asks. Empty until the API responds. */
+function Tape({ markets }) {
+  const rows = markets.filter(m => m.yes_ask_cents != null).slice(0, 14);
+  if (!rows.length) {
+    return (
+      <div className="tape border-y border-line bg-bg2 overflow-hidden py-[13px] relative">
+        <div className="text-center font-mono text-[13px] text-muted2">Connecting to the market feed…</div>
+      </div>
+    );
+  }
+
   /* rendered twice so the -50% keyframe loops seamlessly */
-  const loop = [...matches, ...matches];
+  const loop = [...rows, ...rows];
   return (
     <div className="tape border-y border-line bg-bg2 overflow-hidden py-[13px] relative">
       <div className="tape-track">
         {loop.map((m, i) => (
-          <span key={`${m.p}-${i}`} className="flex gap-[9px] items-center whitespace-nowrap">
-            <b className="text-text font-semibold">{m.p.split(' vs.')[0].toUpperCase()}</b>
-            {m.mkt}¢
-            <span className={m.ev > 0 ? 'text-up' : 'text-down'}>
-              {m.ev > 0 ? '▲' : '▼'} {Math.abs(m.ev)}% EV
-            </span>
+          <span key={`${m.ticker}-${i}`} className="flex gap-[9px] items-center whitespace-nowrap">
+            <b className="text-text font-semibold">
+              {(m.player_name ?? m.matchup ?? '').split(' ').pop().toUpperCase()}
+            </b>
+            {m.yes_ask_cents}¢
+            {m.ev_pct == null
+              ? <span className="text-muted2">unrated</span>
+              : <span className={m.ev_pct > 0 ? 'text-up' : 'text-down'}>
+                  {m.ev_pct > 0 ? '▲' : '▼'} {Math.abs(m.ev_pct).toFixed(1)}% EV
+                </span>}
           </span>
         ))}
       </div>

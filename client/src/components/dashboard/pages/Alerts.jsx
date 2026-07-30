@@ -1,59 +1,94 @@
 import { Tag } from '../../common';
+import { api, fmtNum, fmtPct, fmtTime } from '../../../lib/api';
 import { PageHead } from '../PageHead';
+import { AuthNotice, Empty, ErrorBox, Loading } from '../Notices';
 
-export default function Alerts({ alerts, onDismiss, onClear, onTrade }) {
+export default function Alerts({ state, onDismiss, onDismissAll, onTrade, health }) {
+  const alerts = state.data?.alerts ?? [];
+  const tradingLive = health?.kalshi?.trading === 'ok';
+  const threshold = health?.settings?.min_ev_threshold;
+
   return (
     <div className="animate-page-in">
       <PageHead
         title="Mispricing alerts"
-        sub="Opportunities above your +8% EV threshold — approve to execute"
-        action={<button className="btn btn-ghost btn-sm" onClick={onClear}>Dismiss all</button>}
+        sub="Opportunities above your EV threshold — approve to execute"
+        action={
+          <button className="btn btn-ghost btn-sm" onClick={onDismissAll} disabled={!alerts.length}>
+            Dismiss all
+          </button>
+        }
       />
 
+      {state.error && <ErrorBox error={state.error} onRetry={state.refresh} />}
+      {!tradingLive && <AuthNotice health={health} />}
+
       <div className="grid grid-cols-[repeat(auto-fill,minmax(330px,1fr))] gap-4 max-sm:grid-cols-1">
-        {alerts.map(a => (
-          <div
-            key={a.id}
-            className={`relative overflow-hidden p-5 rounded-card animate-alert-in transition-all duration-300
-                        ease-[cubic-bezier(.22,1,.36,1)] hover:-translate-y-1 hover:shadow-[0_16px_40px_rgba(0,0,0,.4)]
-                        bg-[linear-gradient(160deg,var(--color-panel2),var(--color-panel))] border
-                        ${a.ev >= 15 ? 'alert-hot border-down/40' : 'border-line2'}`}
-          >
-            <div className="flex justify-between items-start mb-3.5 gap-2.5">
-              <div>
-                <div className="font-mono text-[11px] text-muted2">{a.t}</div>
-                <div className="font-display font-bold text-[15px] mt-[3px]">{a.p}</div>
+        {alerts.map(a => {
+          const bigEdge = (a.edge_cents ?? 0) >= 15;
+          return (
+            <div
+              key={a.id}
+              className={`relative overflow-hidden p-5 rounded-card animate-alert-in transition-all duration-300
+                          ease-[cubic-bezier(.22,1,.36,1)] hover:-translate-y-1 hover:shadow-[0_16px_40px_rgba(0,0,0,.4)]
+                          bg-[linear-gradient(160deg,var(--color-panel2),var(--color-panel))] border
+                          ${bigEdge ? 'alert-hot border-down/40' : 'border-line2'}`}
+            >
+              <div className="flex justify-between items-start mb-3.5 gap-2.5">
+                <div className="min-w-0">
+                  <div className="font-mono text-[11px] text-muted2 truncate">
+                    {a.tournament ?? '—'}{a.round ? ` · ${a.round}` : ''}
+                  </div>
+                  <div className="font-display font-bold text-[15px] mt-[3px]">{a.player_name}</div>
+                  <div className="font-mono text-[11px] text-muted mt-0.5">
+                    {a.opponent_name ? `vs ${a.opponent_name}` : a.matchup}
+                  </div>
+                </div>
+                {bigEdge
+                  ? <Tag className="bg-down/15 text-down animate-hot-pulse">BIG EDGE</Tag>
+                  : <Tag className="bg-amber/15 text-amber">EDGE</Tag>}
               </div>
-              {a.ev >= 15
-                ? <Tag className="bg-down/15 text-down animate-hot-pulse">HIGH EV</Tag>
-                : <Tag className="bg-amber/15 text-amber">EDGE</Tag>}
-            </div>
 
-            <div className="grid grid-cols-3 gap-2.5 mb-4">
-              <Num v={`${a.mkt}¢`} l="Market" />
-              <Num v={`${a.fair}¢`} l="Fair" className="text-ace" />
-              <Num v={`+${a.ev}%`} l="EV" className="text-up" />
-            </div>
+              <div className="grid grid-cols-3 gap-2.5 mb-3">
+                <Num v={a.market_cents != null ? `${a.market_cents}¢` : '—'} l="Ask" />
+                <Num v={a.fair_cents != null ? `${a.fair_cents}¢` : '—'} l="Fair" className="text-ace" />
+                <Num
+                  v={a.edge_cents != null ? `+${a.edge_cents}¢` : '—'}
+                  l="Edge"
+                  className={bigEdge ? 'text-down' : 'text-up'}
+                />
+              </div>
 
-            <div className="flex gap-2.5">
-              <button className="btn btn-danger btn-sm flex-1 justify-center" onClick={() => onDismiss(a.id)}>Dismiss</button>
-              <button className="btn btn-up btn-sm flex-1 justify-center" onClick={() => onTrade(a)}>Approve trade</button>
-            </div>
+              <div className="font-mono text-[11px] text-muted2 mb-3.5 grid grid-cols-2 gap-y-1">
+                <span>UTR Δ {a.utr_gap ?? '—'}</span>
+                <span className="text-right">EV {fmtPct(a.ev_pct)}</span>
+                <span>spread {a.spread_cents != null ? `${a.spread_cents}¢` : '—'}</span>
+                <span className="text-right">{fmtNum(a.volume_available)} at ask</span>
+              </div>
 
-            <div className="font-mono text-[11px] text-muted2 mt-3 text-right">
-              Δ {a.gap} UTR · {a.vol.toLocaleString()} contracts · {a.ago}
+              <div className="flex gap-2.5">
+                <button className="btn btn-danger btn-sm flex-1 justify-center" onClick={() => onDismiss(a.id)}>
+                  Dismiss
+                </button>
+                <button className="btn btn-up btn-sm flex-1 justify-center" onClick={() => onTrade(a)}>
+                  Approve trade
+                </button>
+              </div>
+
+              <div className="font-mono text-[11px] text-muted2 mt-3 text-right">
+                opened {fmtTime(a.created_at)}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      {!alerts.length && (
-        <div className="text-center py-12.5 px-5 text-muted">
-          <div className="text-[38px] mb-2.5">🎾</div>
-          <b>No open alerts</b>
-          <p>The engine is scanning. New edges will appear here the moment they open up.</p>
-        </div>
-      )}
+      {!alerts.length && (state.loading
+        ? <Loading label="Loading alert queue…" />
+        : <Empty icon="🎾" title="No open alerts">
+            The engine is scanning every open ITF market. New edges appear here the moment the book
+            drifts past your {threshold ? `+${threshold}%` : ''} EV threshold.
+          </Empty>)}
     </div>
   );
 }

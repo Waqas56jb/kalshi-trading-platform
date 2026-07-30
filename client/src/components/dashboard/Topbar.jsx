@@ -1,7 +1,19 @@
 import { LiveDot } from '../common';
 import { IconBell, IconBurger, IconSearch } from '../Icons';
 
-export default function Topbar({ query, onQuery, onBurger, onAlerts, latency }) {
+export default function Topbar({ query, onQuery, onBurger, onAlerts, health }) {
+  const sync = health?.sync ?? null;
+  const dbOk = health?.db?.ok ?? false;
+  const latency = sync?.latency_ms ?? null;
+  const connected = dbOk && sync?.status === 'ok';
+
+  const label = !health ? 'CONNECTING…'
+    : !dbOk ? 'DATABASE DOWN'
+    : sync?.status === 'error' ? 'SYNC ERROR'
+    : sync?.status === 'ok' ? 'KALSHI FEED · LIVE'
+    : sync?.syncing ? 'FIRST SYNC RUNNING…'
+    : 'SYNC PENDING';
+
   return (
     <div className="h-[66px] border-b border-line flex items-center gap-4 px-[clamp(14px,2.5vw,28px)]
                     bg-bg/75 backdrop-blur-[14px] sticky top-0 z-80">
@@ -27,11 +39,12 @@ export default function Topbar({ query, onQuery, onBurger, onAlerts, latency }) 
       </div>
 
       <div className="ml-auto flex items-center gap-3.5">
-        <div className="font-mono text-[11.5px] flex items-center gap-[7px] text-up bg-up/10
-                        border border-up/25 py-[7px] px-3 rounded-full">
-          <LiveDot className="bg-up" />
-          <span className="max-[980px]:hidden">KALSHI WS · CONNECTED</span>
-          <span className="font-mono">{latency}ms</span>
+        <div className={`font-mono text-[11.5px] flex items-center gap-[7px] py-[7px] px-3 rounded-full border ${
+          connected ? 'text-up bg-up/10 border-up/25' : 'text-amber bg-amber/10 border-amber/25'
+        }`}>
+          <LiveDot className={connected ? 'bg-up' : 'bg-amber'} />
+          <span className="max-[980px]:hidden">{label}</span>
+          {latency != null && <span className="font-mono">{latency}ms</span>}
         </div>
         <button
           className="w-[38px] h-[38px] rounded-[11px] border border-line2 flex items-center justify-center
@@ -40,7 +53,9 @@ export default function Topbar({ query, onQuery, onBurger, onAlerts, latency }) 
           aria-label="Alerts"
         >
           <IconBell width="17" height="17" />
-          <span className="absolute top-2 right-[9px] w-[7px] h-[7px] rounded-full bg-down border-2 border-bg" />
+          {(health?.sync?.alerts_created ?? 0) >= 0 && (
+            <span className="absolute top-2 right-[9px] w-[7px] h-[7px] rounded-full bg-down border-2 border-bg" />
+          )}
         </button>
         <div className="w-[38px] h-[38px] rounded-full bg-[linear-gradient(135deg,var(--color-ace),#6BA82E)]
                         flex items-center justify-center font-display font-extrabold text-sm text-[#0B0E03]">

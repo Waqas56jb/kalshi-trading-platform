@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import ConfirmModal from './ConfirmModal';
@@ -8,108 +8,121 @@ import Alerts from './pages/Alerts';
 import Trades from './pages/Trades';
 import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
-import { useInterval } from '../../hooks/useUi';
-import { recalc, ri } from '../../lib/data';
+import { usePoll } from '../../hooks/useApi';
+import { api } from '../../lib/api';
 import { useToast } from '../Toasts';
 
-export default function Dashboard({
-  matches, setMatches, alerts, setAlerts, trades, setTrades, onHome, onLogout,
-}) {
+export default function Dashboard({ onHome, onLogout }) {
   const toast = useToast();
   const [page, setPage] = useState('overview');
   const [sbOpen, setSbOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [botOn, setBotOn] = useState(true);
-  const [latency, setLatency] = useState(42);
-  const [flash, setFlash] = useState({});
-  const [modalCtx, setModalCtx] = useState(null);
+  const [modalAlert, setModalAlert] = useState(null);
+  const [executing, setExecuting] = useState(false);
+
+  const health = usePoll(() => api.health(), { intervalMs: 15000 });
+  const alerts = usePoll(() => api.alerts('open'), { intervalMs: 10000 });
+  const settings = usePoll(() => api.settings(), {});
 
   const goPage = (name, close = true) => {
     if (name !== page) setPage(name);
     if (close) setSbOpen(false);
   };
 
-  /* ---- live market simulation ---- */
-  useInterval(() => {
-    const i = ri(0, matches.length - 1);
-    const dir = Math.random() < 0.5 ? -1 : 1;
-    setMatches(prev => prev.map((m, j) =>
-      j === i ? recalc({ ...m, mkt: Math.max(8, Math.min(96, m.mkt + dir)) }) : m,
-    ));
-    setFlash(f => ({ ...f, [i]: { dir: dir > 0 ? 'up' : 'down', seq: (f[i]?.seq ?? 0) + 1 } }));
-    setLatency(ri(31, 88));
-  }, 1500);
+  const openAlerts = alerts.data?.alerts ?? [];
+  const h = health.data ?? null;
+  const botEnabled = settings.data?.settings?.bot_enabled ?? true;
 
-  /* ---- occasionally spawn a new alert ---- */
-  useInterval(() => {
-    if (alerts.length >= 6 || Math.random() < 0.5) return;
-    const pool = matches.filter(m => m.hot && !alerts.find(a => a.p === m.p));
-    if (!pool.length) return;
-    const m = pool[ri(0, pool.length - 1)];
-    setAlerts(v => [{ ...m, id: Date.now(), ago: 'just now' }, ...v]);
-    toast('New mispricing 🔔', `${m.p} — market ${m.mkt}¢ vs fair ${m.fair}¢ (+${m.ev}% EV).`);
-  }, 12000);
-
-  const dismissAlert = id => {
-    setAlerts(v => v.filter(a => a.id !== id));
-    toast('Alert dismissed', 'Removed from the queue. The engine keeps watching this market.');
-  };
-  const clearAlerts = () => {
-    setAlerts([]);
-    toast('Queue cleared', 'All alerts dismissed.');
+  const toggleBot = async () => {
+    const next = !botEnabled;
+    try {
+      await api.saveSettings({ bot_enabled: next });
+      await settings.refresh({ quiet: true });
+      toast(next ? 'Engine resumed' : 'Engine paused',
+        next ? 'Scanning all configured ITF series for edges.' : 'Scanning paused. Existing alerts remain.');
+    } catch (e) {
+      toast('Could not update', e.message, 'tdown');
+    }
   };
 
-  const confirmTrade = a => {
-    setModalCtx(null);
-    setAlerts(v => v.filter(x => x.id !== a.id));
-    setTrades(v => [
-      { time: 'Just now', match: a.p, side: 'YES', entry: a.mkt, fair: a.fair, size: 250, ev: a.ev, res: 'open', pnl: 0 },
-      ...v,
-    ]);
-    toast('Order filled ⚡', `Swept ${a.vol.toLocaleString()} contracts on ${a.p} @ ${a.mkt}¢ (fair ${a.fair}¢).`, 'tup');
+  const dismissAlert = async id => {
+    try {
+      await api.dismissAlert(id);
+      await alerts.refresh({ quiet: true });
+      toast('Alert dismissed', 'Removed from the queue. The engine keeps watching this market.');
+    } catch (e) {
+      toast('Could not dismiss', e.message, 'tdown');
+    }
   };
 
-  const toggleBot = () => {
-    const on = !botOn;
-    setBotOn(on);
-    toast(on ? 'Bot resumed' : 'Bot paused',
-      on ? 'Scanning all ITF markets for edges.' : 'Execution paused. You will still receive alerts.');
+  const dismissAll = async () => {
+    try {
+      const r = await api.dismissAllAlerts();
+      await alerts.refresh({ quiet: true });
+      toast('Queue cleared', `${r.dismissed} alert${r.dismissed === 1 ? '' : 's'} dismissed.`);
+    } catch (e) {
+      toast('Could not clear', e.message, 'tdown');
+    }
   };
+
+  /** Sends the real order. Surfaces the exchange's own reason on refusal. */
+  const confirmExecute = useCallback(async alert => {
+    setExecuting(true);
+    try {
+      const r = await api.executeAlert(alert.id);
+      setModalAlert(null);
+      await alerts.refresh({ quiet: true });
+      toast('Order filled ⚡',
+        `${r.trade.size_contracts} contracts on ${r.trade.player_name} @ ${r.trade.entry_cents}¢.`, 'tup');
+    } catch (e) {
+      setModalAlert(null);
+      const detail = e.body?.detail ?? e.message;
+      toast('Order not placed', detail, 'tdown');
+      // a failed attempt is still recorded server-side — refresh so it shows
+      await alerts.refresh({ quiet: true });
+    } finally {
+      setExecuting(false);
+    }
+  }, [alerts, toast]);
 
   return (
     <div className="flex min-h-screen">
       <Sidebar
         open={sbOpen} page={page} onPage={goPage} onClose={() => setSbOpen(false)}
         onHome={onHome} onLogout={onLogout}
-        alertCount={alerts.length} botOn={botOn} onToggleBot={toggleBot}
+        alertCount={openAlerts.length}
+        botOn={botEnabled} onToggleBot={toggleBot}
+        health={h}
       />
 
       <div className="flex-1 ml-[248px] flex flex-col min-w-0 max-[980px]:ml-0">
         <Topbar
-          query={query} onQuery={setQuery} latency={latency}
+          query={query} onQuery={setQuery} health={h}
           onBurger={() => setSbOpen(v => !v)}
           onAlerts={() => goPage('alerts')}
         />
 
         <div className="p-[clamp(16px,2.5vw,30px)] max-w-[1440px] w-full mx-auto">
           {page === 'overview' && (
-            <Overview matches={matches} alerts={alerts} onPage={goPage} onTrade={setModalCtx} />
+            <Overview alerts={openAlerts} health={h} onPage={goPage} onTrade={setModalAlert} />
           )}
-          {page === 'markets' && (
-            <Markets matches={matches} query={query} flash={flash} onTrade={setModalCtx} />
-          )}
+          {page === 'markets' && <Markets search={query} onTrade={setModalAlert} />}
           {page === 'alerts' && (
-            <Alerts alerts={alerts} onDismiss={dismissAlert} onClear={clearAlerts} onTrade={setModalCtx} />
+            <Alerts
+              state={alerts} onDismiss={dismissAlert} onDismissAll={dismissAll}
+              onTrade={setModalAlert} health={h}
+            />
           )}
-          {page === 'trades' && <Trades trades={trades} />}
+          {page === 'trades' && <Trades />}
           {page === 'analytics' && <Analytics />}
-          {page === 'settings' && (
-            <Settings onSave={() => toast('Settings saved', 'All changes applied to the live engine.', 'tup')} />
-          )}
+          {page === 'settings' && <Settings state={settings} />}
         </div>
       </div>
 
-      <ConfirmModal ctx={modalCtx} onClose={() => setModalCtx(null)} onConfirm={confirmTrade} />
+      <ConfirmModal
+        alert={modalAlert} busy={executing} health={h}
+        onClose={() => setModalAlert(null)} onConfirm={confirmExecute}
+      />
     </div>
   );
 }

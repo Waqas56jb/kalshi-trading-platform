@@ -1,10 +1,14 @@
-# Keeps the desk's market data fresh.
+# Keeps the desk's market data fresh and runs the exit rules while nobody is
+# watching the dashboard.
 #
-# Vercel Cron on the Hobby plan is limited to one run per day, which is far too
-# slow for a trading desk, so the real cadence comes from here instead. GitHub's
-# scheduler has a 5-minute floor and can run late under load — treat this as
-# best-effort. Upgrading Vercel to Pro allows `* * * * *` in vercel.json and this
-# workflow can then be deleted.
+# The dashboard syncs itself every 60 seconds whenever it is open, so this
+# workflow only matters when it is closed — overnight, mostly, which is exactly
+# when an unattended take-profit needs to fire.
+#
+# Vercel Cron on the Hobby plan is capped at one run per day, far too slow for a
+# trading desk, so the real cadence comes from here. GitHub's scheduler has a
+# 5-minute floor and runs late under load: treat it as best-effort. Upgrading
+# Vercel to Pro allows `* * * * *` in vercel.json, and this file can then go.
 name: sync markets
 
 on:
@@ -16,19 +20,33 @@ concurrency:
   group: market-sync
   cancel-in-progress: false     # never cut a sync short; skip instead
 
+env:
+  # The backend URL is public, so it lives here as a default rather than a secret.
+  # Override it with a DEPLOY_URL repository variable or secret if the deployment
+  # ever moves.
+  URL: ${{ secrets.DEPLOY_URL || vars.DEPLOY_URL || 'https://kalshi-trading-platform-backend.vercel.app' }}
+  SECRET: ${{ secrets.CRON_SECRET }}
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Trigger sync
-        env:
-          URL: ${{ secrets.DEPLOY_URL }}
-          SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          if [ -z "$URL" ] || [ -z "$SECRET" ]; then
-            echo "::error::DEPLOY_URL and CRON_SECRET repository secrets must both be set."
-            exit 1
+          # Missing credentials are a setup gap, not a broken build. This used to
+          # exit 1, which mailed a red "All jobs have failed" notice every five
+          # minutes for a workflow that had simply never been configured.
+          if [ -z "$SECRET" ]; then
+            echo "::notice::CRON_SECRET is not set, so background sync is off."
+            echo
+            echo "The dashboard still syncs itself every 60s while it is open."
+            echo "What this adds is syncing — and auto-selling — while it is closed."
+            echo
+            echo "To switch it on, set the repository secret CRON_SECRET to the"
+            echo "same value as CRON_SECRET in the backend's Vercel environment:"
+            echo "  Settings -> Secrets and variables -> Actions -> New repository secret"
+            exit 0
           fi
 
           code=$(curl -sS -o response.json -w '%{http_code}' \
@@ -46,10 +64,7 @@ jobs:
           fi
 
       - name: Reconcile open orders
-        if: success()
-        env:
-          URL: ${{ secrets.DEPLOY_URL }}
-          SECRET: ${{ secrets.CRON_SECRET }}
+        if: success() && env.SECRET != ''
         run: |
           curl -sS --max-time 60 -X POST "$URL/api/trades/reconcile" \
             -H "Authorization: Bearer $SECRET" || true

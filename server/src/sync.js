@@ -1,6 +1,6 @@
 import { config, t } from './config.js';
 import { syncSchedule } from './schedule.js';
-import { snapshotPortfolio } from './orders.js';
+import { snapshotPortfolio, autoSellAtFair } from './orders.js';
 import { importKalshiHistory } from './importer.js';
 import { backfillRatings } from './ratings.js';
 import { query, tx } from './db.js';
@@ -506,6 +506,16 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        trades placed outside this desk. */
     await importKalshiHistory(kalshi).catch(() => null);
 
+    /* Run the exit rules — take-profit, stop-loss and sell-at-fair.
+       These used to be reached only from the reconcile cron, which has never run
+       because its repository secrets were never set, so positions sailed past
+       +20% and nothing sold. They belong here: the rules compare the live bid
+       against entry, and the bid was refreshed moments ago in the block above.
+       A failure must not fail the sync — market data still needs to land. */
+    const exits = await autoSellAtFair(kalshi).catch(e => ({
+      enabled: true, closed: 0, error: String(e.message).slice(0, 160),
+    }));
+
     const latency = Date.now() - t0;
     await query(
       `update ${t('sync_runs')} set status='ok', finished_at=now(), events_seen=$2,
@@ -516,9 +526,10 @@ export async function runSync(kalshi, { verbose = false } = {}) {
 
     if (verbose) {
       console.log(`  events=${out.events} markets=${rows.length} ticks=${out.ticks} ` +
-        `signals=${out.computed} actionable=${out.actionable} alerts+${out.created}/-${out.expired} ${latency}ms`);
+        `signals=${out.computed} actionable=${out.actionable} alerts+${out.created}/-${out.expired} ` +
+        `exits=${exits.closed ?? 0} ${latency}ms`);
     }
-    return { ok: true, runId, latency, marketsSeen: rows.length, ...out };
+    return { ok: true, runId, latency, marketsSeen: rows.length, ...out, exits };
   } catch (e) {
     await query(
       `update ${t('sync_runs')} set status='error', finished_at=now(), error=$2, latency_ms=$3 where id=$1`,

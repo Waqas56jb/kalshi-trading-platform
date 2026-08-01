@@ -3,6 +3,7 @@ import { query } from './db.js';
 import { evaluateBet, kalshiFeeRate, probabilityBucket, utrBracket } from './risk.js';
 import { calibrationMap } from './calibration.js';
 import { bookConsensus } from './crossmarket.js';
+import { assessQuote, marketProbability, QUOTE_REASONS } from './quote.js';
 
 /**
  * Shadow trading: the risk engine runs against live markets and real prices,
@@ -231,6 +232,7 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
   const { rows: candidates } = await query(
     `select m.ticker, m.event_ticker, m.player_name, m.competitor_id,
             m.yes_ask_cents, m.yes_bid_cents, m.yes_ask_size, m.match_date, m.status,
+            opp.yes_ask_cents as opponent_ask, opp.yes_bid_cents as opponent_bid,
             s.fair_cents, s.market_cents, s.utr_gap, s.side_type, s.opponent_name,
             s.model, s.computed_at,
             p.utr_status, opp.ticker as opponent_ticker
@@ -280,7 +282,35 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
     const bestAskCents = book?.best_ask ?? c.yes_ask_cents;
 
     const modelProbability = c.fair_cents / 100;
-    const marketReference = c.market_cents / 100;
+
+    /* The shrinkage anchor comes from both sides normalised to sum to one, not
+       from a single ask. A lone ask carries the whole spread and reads high, and
+       on an empty book it is not a price at all — which is how a player the model
+       had at 14% came to be shown as "94% on Kalshi". When the pair is not a real
+       book there is no anchor, and the opportunity is dropped rather than shrunk
+       toward a number nobody was offering. */
+    const market = marketProbability({
+      bid: c.yes_bid_cents,
+      ask: c.yes_ask_cents,
+      opponentBid: c.opponent_bid,
+      opponentAsk: c.opponent_ask,
+    });
+    if (market.probability == null) {
+      decisions.push({
+        candidate: c,
+        bestAskCents: c.yes_ask_cents,
+        levels: 0,
+        decision: {
+          approved: false,
+          stakeCents: 0,
+          contracts: 0,
+          limitingConstraint: 'no real market',
+          rejectionReason: QUOTE_REASONS[market.reason] ?? market.reason,
+        },
+      });
+      continue;
+    }
+    const marketReference = market.probability;
     const priceAtModelTime = bestAskCents / 100;
     const bucket = probabilityBucket(modelProbability);
 

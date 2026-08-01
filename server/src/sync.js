@@ -7,6 +7,7 @@ import { syncSettlements } from './settlements.js';
 import { runShadowCycle, settleShadowTrades } from './shadow.js';
 import { recomputeCalibration, refitUtrCurve, loadUtrCurve } from './calibration.js';
 import { query, tx } from './db.js';
+import { assessQuote } from './quote.js';
 import {
   buildSignalsForEvent, classifySchedule, dayIn, dollarsToCents, looksInPlay,
   matchDateFromTicker, parseMarketTitle, sideType, toNum,
@@ -256,10 +257,27 @@ async function computeSignals(client, rows, settings) {
    * retirement, and those are exactly what a 0/1c quote against a strong
    * favourite looks like.
    */
+  /* Opponent asks, so a quote can be judged against the only test that cannot be
+     argued with: the two sides of one match must sum to about 100. */
+  const opponentAsk = new Map();
+  for (const r of rows) {
+    const other = rows.find(o => o.event_ticker === r.event_ticker && o.ticker !== r.ticker);
+    if (other) opponentAsk.set(r.ticker, other.yes_ask_cents ?? null);
+  }
+
   const review = s => {
     const m = byTicker.get(s.ticker);
     const bid = m?.yes_bid_cents ?? null;
     const ask = m?.yes_ask_cents ?? null;
+
+    /* Is this a price at all? Across a live sample 64 of 108 markets quoted both
+       sides at 95c against 2c bids, which is Kalshi showing the widest possible
+       spread because nobody is making a market. Computing an edge against that
+       produced the "94% ask on Kalshi" the client asked about, on a player the
+       model had at 14%. There was no 94c. */
+    const quote = assessQuote({ bid, ask, opponentAsk: opponentAsk.get(s.ticker) ?? null });
+    if (!quote.tradable) return quote.reason === 'book_is_empty'
+      ? 'no_real_market' : quote.reason;
     const edge = s.fair_cents - s.market_cents;
 
     /* Absolute edge first. Percentage EV inflates on cheap contracts — a 3c edge

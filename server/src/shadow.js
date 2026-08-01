@@ -1,7 +1,7 @@
 import { config, t } from './config.js';
 import { query } from './db.js';
 import { evaluateBet, kalshiFeeRate, probabilityBucket, utrBracket } from './risk.js';
-import { calibrationMap } from './calibration.js';
+import { calibrationMap, derivedLimits } from './calibration.js';
 import { bookConsensus } from './crossmarket.js';
 import { assessQuote, marketProbability, QUOTE_REASONS } from './quote.js';
 
@@ -70,7 +70,10 @@ export async function loadRiskConfig() {
     minRoi: n(s.min_roi, 0.10),
     sub10MinRoi: n(s.sub10_min_roi, 0.30),
     absoluteMinProbability: n(s.absolute_min_probability, 0.05),
-    minPriceCents: n(s.min_price_cents, 20),
+    /* Placeholder. loadRiskConfig's caller overlays the derived floor, which is
+       measured from settled results rather than typed in. This value survives
+       only as a manual override. */
+    minPriceCents: n(s.min_price_cents, 25),
 
     crossMarketEnabled: s.cross_market_enabled === true,
     crossMarketMinEdge: n(s.cross_market_min_edge, 0.03),
@@ -228,6 +231,13 @@ async function shadowPortfolio(cfg) {
 export async function runShadowCycle(kalshi, { verbose = false } = {}) {
   const cfg = await loadRiskConfig();
   if (!cfg.shadowMode) return { skipped: 'shadow_mode_off' };
+
+  /* The floor the data supports, not the one someone typed. Everything under 25c
+     lost across 237 settled bets, and the sub-10c band went 0 for 134. */
+  const limits = await derivedLimits().catch(() => ({}));
+  if (limits.minimum_price?.value != null) {
+    cfg.minPriceCents = Math.round(limits.minimum_price.value);
+  }
 
   const { rows: candidates } = await query(
     `select m.ticker, m.event_ticker, m.player_name, m.competitor_id,

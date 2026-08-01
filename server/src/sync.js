@@ -5,7 +5,9 @@ import { importKalshiHistory } from './importer.js';
 import { backfillRatings } from './ratings.js';
 import { syncSettlements } from './settlements.js';
 import { runShadowCycle, settleShadowTrades } from './shadow.js';
-import { recomputeCalibration, refitUtrCurve, loadUtrCurve } from './calibration.js';
+import {
+  recomputeCalibration, refitUtrCurve, loadUtrCurve, deriveMinimumPrice,
+} from './calibration.js';
 import { query, tx } from './db.js';
 import { assessQuote } from './quote.js';
 import {
@@ -553,6 +555,7 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        waiting for someone to notice it has drifted. */
     await recomputeCalibration({ minSample: 40 }).catch(() => null);
     await refitUtrCurve({ minSample: 40 }).catch(() => null);
+    await deriveMinimumPrice().catch(() => null);
 
     /* Run the exit rules — take-profit, stop-loss and sell-at-fair.
        These used to be reached only from the reconcile cron, which has never run

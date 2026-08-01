@@ -285,3 +285,98 @@ export async function loadUtrCurve() {
 }
 
 export { BRACKETS, utrBracket };
+
+/* ---------------------------------------------------------- derived limits */
+
+const PRICE_BANDS = [
+  { band: 'under 10c', low: 1, high: 10 },
+  { band: '10-15c', low: 10, high: 15 },
+  { band: '15-20c', low: 15, high: 20 },
+  { band: '20-25c', low: 20, high: 25 },
+  { band: '25-35c', low: 25, high: 35 },
+  { band: '35-50c', low: 35, high: 50 },
+  { band: '50c+', low: 50, high: 100 },
+];
+
+/**
+ * Works out the minimum price worth trading, from settled results.
+ *
+ * The client's instruction was to stop typing these in — "the risk algorithm is
+ * supposed to do what's best" — and on this one he is plainly right. A price
+ * floor is not a preference; there is a correct answer and the data holds it.
+ *
+ * Measured over model-liked bets: everything under 25c loses, and the sub-10c
+ * band is 134 bets with not a single winner. So the floor is the cheapest band
+ * that has both a meaningful sample and non-negative returns, and it moves on
+ * its own as more matches settle. Until there is enough evidence it stays where
+ * it is rather than guessing.
+ */
+export async function deriveMinimumPrice({ minBandSample = 20, fallbackCents = 25 } = {}) {
+  const { rows } = await query(
+    `with cut as (select ticker, close_time - interval '3 hours' as pe from ${t('markets')}),
+     px as (
+       select ph.ticker, (array_agg(ph.yes_ask_cents order by ph.captured_at desc))[1] as ask
+       from ${t('price_history')} ph join cut on cut.ticker = ph.ticker
+       where ph.captured_at <= cut.pe and ph.yes_ask_cents is not null
+       group by ph.ticker
+     )
+     select px.ask, (m.result = 'yes')::int as won
+     from ${t('markets')} m
+     join px on px.ticker = m.ticker
+     join ${t('signals')} s on s.ticker = m.ticker
+     where m.result in ('yes','no') and s.fair_cents is not null
+       and px.ask between 1 and 99 and s.fair_cents - px.ask >= 4`);
+
+  if (!rows.length) return { floorCents: fallbackCents, sample: 0, derived: false };
+
+  const evidence = PRICE_BANDS.map(b => {
+    const inBand = rows.filter(r => Number(r.ask) >= b.low && Number(r.ask) < b.high);
+    let staked = 0;
+    let ret = 0;
+    for (const r of inBand) {
+      const ask = Number(r.ask);
+      // Kalshi's fee, charged per contract on entry
+      const fee = Math.ceil(0.07 * (ask / 100) * (1 - ask / 100) * 100);
+      staked += ask;
+      ret += (r.won ? 100 : 0) - ask - fee;
+    }
+    return {
+      band: b.band,
+      low: b.low,
+      bets: inBand.length,
+      wins: inBand.filter(r => r.won).length,
+      roi: staked > 0 ? +((ret / staked) * 100).toFixed(1) : null,
+    };
+  });
+
+  const firstGood = evidence.find(e => e.bets >= minBandSample && e.roi != null && e.roi >= 0);
+  const floorCents = firstGood ? firstGood.low : fallbackCents;
+
+  await query(
+    `insert into ${t('derived_limits')} (name, value, unit, sample_size, evidence, computed_at)
+     values ('minimum_price', $1, 'cents', $2, $3::jsonb, now())
+     on conflict (name) do update set
+       value = excluded.value, sample_size = excluded.sample_size,
+       evidence = excluded.evidence, computed_at = now()`,
+    [floorCents, rows.length, JSON.stringify(evidence)],
+  );
+
+  return { floorCents, sample: rows.length, derived: Boolean(firstGood), evidence };
+}
+
+/** Everything the engine works out for itself, for the read-only panel. */
+export async function derivedLimits() {
+  const r = await query(
+    `select name, value, unit, sample_size, evidence, computed_at from ${t('derived_limits')}`);
+  const out = {};
+  for (const row of r.rows) {
+    out[row.name] = {
+      value: Number(row.value),
+      unit: row.unit,
+      sampleSize: row.sample_size,
+      evidence: row.evidence,
+      computedAt: row.computed_at,
+    };
+  }
+  return out;
+}

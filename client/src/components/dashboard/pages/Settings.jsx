@@ -7,58 +7,13 @@ import { PageHead } from '../PageHead';
 import { ErrorBox, Loading } from '../Notices';
 import { MyAccountPanel, TeamPanel } from './AccountPanels';
 
-const TOGGLES = [
-  ['prematch_only', 'Pre-match alerts only',
-   'Never alert on a match that is under way. In-play prices move on what is happening on court, which the model cannot see.'],
-  ['sound_enabled', 'Alert sound',
-   'Play a chime and raise a desktop notification when a new alert arrives.'],
-  ['paper_trading', 'Paper trading',
-   'Record positions at the real ask without sending an order to Kalshi. Settles against the real result.'],
-  ['manual_approval', 'Manual approval required', 'Every order needs your tap before it fires'],
-  ['sweep_full_volume', 'Sweep full volume at price', 'Cap size at the contracts available at the ask'],
-  ['pushover_enabled', 'Pushover alerts', 'Instant push to your phone on every edge'],
-  ['sms_fallback', 'Twilio SMS fallback', 'SMS if push is not delivered in 5s'],
-  ['inplay_enabled', 'In-play markets', 'Also price matches that are already under way'],
-  ['auto_sell_at_fair', 'Auto-sell at fair value',
-   'Close a position once its bid reaches the modelled fair value — the edge is gone, so holding on is match risk for nothing.'],
-  ['take_profit_enabled', 'Take profit at a target return',
-   'Close a position once it is up by the percentage below, whether or not it has reached fair value.'],
-  ['stop_loss_enabled', 'Stop loss',
-   'Close a position once it is down by the percentage below.'],
-];
 
-const EXITS = [
-  ['take_profit_pct', 'Take profit at (%)', 1, 1,
-   'Return on the entry price, measured against the live bid — the price you could actually sell at.'],
-  ['stop_loss_pct', 'Stop loss at (%)', 1, 1,
-   'How far the bid may fall below entry before the position is closed.'],
-];
 
-const NUMBERS = [
-  ['stake_per_trade', 'Stake per trade (USD)', 10, 10],
-  ['max_exposure_per_match', 'Max exposure per match (USD)', 50, 50],
-];
 
 /* Liquidity and sanity guards. Without these the actionable queue fills with
    decided matches: a 0/1c quote against a strong favourite is what a withdrawal
    looks like, and no ratings model can see one. */
-const TIMING = [
-  ['alert_lead_minutes', 'Minimum lead time (minutes)', 0, 1,
-   'A match must be at least this far away to raise an alert, so there is time to act on it.'],
-  ['alert_max_hours', 'Maximum horizon (hours)', 1, 1,
-   'Ignore matches further out than this — quotes that far ahead are thin and stale.'],
-];
 
-const GUARDS = [
-  ['min_edge_cents', 'Minimum edge (¢)', 1, 1,
-   'Alerts need at least this much absolute edge. Cents, not percent — percentage EV inflates on cheap contracts, so a 3¢ edge on a 1¢ ask reads as +300%.'],
-  ['min_bid_cents', 'Minimum bid (¢)', 0, 1,
-   'Below this nobody is really making a market on this player.'],
-  ['max_spread_cents', 'Maximum spread (¢)', 1, 1,
-   'A wide book means your fill price is not the price the model assumed.'],
-  ['max_edge_cents', 'Maximum believable edge (¢)', 5, 1,
-   'Beyond this the market almost certainly knows something the ratings do not — kept for review, not traded.'],
-];
 
 export default function Settings({ state, user, onUserChange }) {
   const toast = useToast();
@@ -78,15 +33,16 @@ export default function Settings({ state, user, onUserChange }) {
   const save = async () => {
     setSaving(true);
     try {
+      /* Only capital and mode. Every threshold this page used to send is now
+         measured from settled results, so writing one here would be overruling
+         the engine by hand — which is precisely what the client asked to make
+         impossible. */
       const patch = {
-        min_ev_threshold: Number(form.min_ev_threshold),
-        min_utr_gap: Number(form.min_utr_gap),
-        stake_per_trade: Number(form.stake_per_trade),
-        max_exposure_per_match: Number(form.max_exposure_per_match),
-        ...Object.fromEntries(GUARDS.map(([k]) => [k, Number(form[k])])),
-        ...Object.fromEntries(TIMING.map(([k]) => [k, Number(form[k])])),
-        ...Object.fromEntries(EXITS.map(([k]) => [k, Number(form[k])])),
-        ...Object.fromEntries(TOGGLES.map(([k]) => [k, !!form[k]])),
+        simulated_bankroll_usd: Number(form.simulated_bankroll_usd),
+        minimum_free_cash_fraction: Number(form.minimum_free_cash_fraction),
+        shadow_mode: form.shadow_mode !== false,
+        shadow_auto_place: form.shadow_auto_place !== false,
+        cross_market_enabled: form.cross_market_enabled === true,
       };
       const r = await api.saveSettings(patch);
       setForm(r.settings);
@@ -105,8 +61,8 @@ export default function Settings({ state, user, onUserChange }) {
     <div className="animate-page-in">
       <PageHead
         title="Settings"
-        sub={tab === 'strategy' ? 'The decisions only you can make — risk appetite, not arithmetic'
-          : tab === 'model' ? 'Derived from settled matches. Read-only by design.'
+        sub={tab === 'strategy' ? 'How much capital the desk may use. The engine works out the rest.'
+          : tab === 'model' ? 'Measured from settled matches. Read-only by design.'
           : 'Your account and desk access'}
         action={tab === 'strategy' && (
           <button className="btn btn-ace btn-sm" onClick={save} disabled={saving || !dirty || !isAdmin}>
@@ -116,7 +72,7 @@ export default function Settings({ state, user, onUserChange }) {
       />
 
       <div className="flex gap-2 mb-5.5">
-        <ChipBtn on={tab === 'strategy'} onClick={() => setTab('strategy')}>Strategy</ChipBtn>
+        <ChipBtn on={tab === 'strategy'} onClick={() => setTab('strategy')}>Bankroll</ChipBtn>
         <ChipBtn on={tab === 'model'} onClick={() => setTab('model')}>What the model works out</ChipBtn>
         <ChipBtn on={tab === 'account'} onClick={() => setTab('account')}>
           {isAdmin ? 'Account & team' : 'My account'}
@@ -150,142 +106,78 @@ export default function Settings({ state, user, onUserChange }) {
       )}
 
       {tab === 'strategy' && (
-      <>
-      {!isAdmin && (
-        <div className="mb-5 rounded-card border border-line2 bg-panel p-4 text-[13px] text-muted">
-          Strategy settings are read-only for traders — an administrator changes these.
-        </div>
-      )}
-      <div className="grid grid-cols-2 gap-4 max-[980px]:grid-cols-1">
-        <Panel title="Strategy">
-          <div className="fld mb-4.5">
-            <Label>Minimum EV threshold</Label>
-            <div className="slider-row flex items-center gap-4">
-              <input
-                type="range" min="2" max="60" step="1"
-                value={form.min_ev_threshold}
-                onChange={e => set('min_ev_threshold', e.target.value)}
-              />
-              <span className="font-mono font-bold text-ace min-w-[64px] text-right text-[15px]">
-                +{Number(form.min_ev_threshold).toFixed(0)}%
-              </span>
+        <>
+          {!isAdmin && (
+            <div className="mb-5 rounded-card border border-line2 bg-panel p-4 text-[13px] text-muted">
+              These are read-only for traders — an administrator changes them.
             </div>
-            <p className="text-[11.5px] text-muted2 mt-2 font-mono">
-              Percentage EV inflates on cheap contracts — a 1¢ error on a 3¢ ask reads as +33%.
-              Sort by the Edge column to judge in cents.
-            </p>
+          )}
+
+          <div className="mb-5 text-[13px] text-muted">
+            The only numbers left here are the ones no algorithm can settle for you: how much
+            capital the desk may put at risk. Every threshold that used to live on this page —
+            edge floors, the UTR gap, exposure caps, the minimum price — is now measured from
+            settled results and shown, read-only, under{' '}
+            <strong className="text-ink">What the model works out</strong>.
           </div>
 
-          <div className="fld mb-4.5">
-            <Label>UTR gap — minimum to price</Label>
-            <div className="slider-row flex items-center gap-4">
+          <Panel title="Capital">
+            <div className="fld mb-4.5">
+              <Label>Bankroll ($)</Label>
               <input
-                type="range" min="0" max="3" step="0.1"
-                value={form.min_utr_gap}
-                onChange={e => set('min_utr_gap', e.target.value)}
+                type="number" min="100" step="100"
+                value={form.simulated_bankroll_usd ?? ''}
+                onChange={e => set('simulated_bankroll_usd', e.target.value)}
               />
-              <span className="font-mono font-bold text-ace min-w-[64px] text-right text-[15px]">
-                Δ {Number(form.min_utr_gap).toFixed(1)}
-              </span>
+              <p className="text-[11.5px] text-muted2 mt-2 font-mono">
+                What the desk sizes against. No real money moves while shadow mode is on.
+              </p>
             </div>
-          </div>
 
-          {NUMBERS.map(([k, label, min, step]) => (
-            <div className="fld mb-4.5" key={k}>
-              <Label>{label}</Label>
-              <input
-                type="number" min={min} step={step}
-                value={form[k]}
-                onChange={e => set(k, e.target.value)}
-              />
-            </div>
-          ))}
-        </Panel>
-
-        <Panel title="Exit rules">
-          <p className="text-[12.5px] text-muted mb-4.5">
-            Each rule is checked against the live bid on every sync — the price the position could
-            actually be sold at, not the mid. Whichever triggers first closes the position, and the
-            ledger records which one it was.
-          </p>
-          {EXITS.map(([k, label, min, step, help]) => (
-            <div className="fld mb-4.5" key={k}>
-              <Label>{label}</Label>
-              <input type="number" min={min} step={step} value={form[k] ?? ''}
-                onChange={e => set(k, e.target.value)} />
-              <p className="text-[11.5px] text-muted2 mt-1.5">{help}</p>
-            </div>
-          ))}
-        </Panel>
-
-        <Panel title="Alert timing">
-          <p className="text-[12.5px] text-muted mb-4.5">
-            Kalshi publishes a half-hour scheduling slot rather than a first-serve time, and ITF start
-            times slip. The slot is treated as the earliest a match can begin, so an alert is dropped a
-            little early rather than shown once play is under way.
-          </p>
-          {TIMING.map(([k, label, min, step, help]) => (
-            <div className="fld mb-4.5" key={k}>
-              <Label>{label}</Label>
-              <input type="number" min={min} step={step} value={form[k] ?? ''}
-                onChange={e => set(k, e.target.value)} />
-              <p className="text-[11.5px] text-muted2 mt-1.5">{help}</p>
-            </div>
-          ))}
-        </Panel>
-
-        <Panel title="Signal guards">
-          <p className="text-[12.5px] text-muted mb-4.5">
-            Live data showed the model&apos;s biggest disagreements with the market are where it is most
-            likely <i>wrong</i> — a withdrawal or retirement looks exactly like a huge edge. These keep
-            such rows visible for review instead of in the trade queue.
-          </p>
-          {GUARDS.map(([k, label, min, step, help]) => (
-            <div className="fld mb-4.5" key={k}>
-              <Label>{label}</Label>
-              <input type="number" min={min} step={step} value={form[k] ?? ''}
-                onChange={e => set(k, e.target.value)} />
-              <p className="text-[11.5px] text-muted2 mt-1.5">{help}</p>
-            </div>
-          ))}
-        </Panel>
-
-        <Panel title="Execution & alerts">
-          {TOGGLES.map(([k, title, desc]) => (
-            <div key={k} className="flex items-center justify-between gap-3.5 py-[15px] border-b border-line last:border-b-0">
-              <div>
-                <div className="font-semibold text-sm">{title}</div>
-                <div className="text-muted text-[12.5px] mt-0.5">{desc}</div>
+            <div className="fld mb-4.5">
+              <Label>Cash reserve — never deployed</Label>
+              <div className="slider-row flex items-center gap-4">
+                <input
+                  type="range" min="0" max="95" step="5"
+                  value={Math.round(Number(form.minimum_free_cash_fraction ?? 0.6) * 100)}
+                  onChange={e => set('minimum_free_cash_fraction', Number(e.target.value) / 100)}
+                />
+                <span className="font-mono font-bold text-ace min-w-[64px] text-right text-[15px]">
+                  {Math.round(Number(form.minimum_free_cash_fraction ?? 0.6) * 100)}%
+                </span>
               </div>
-              <button
-                className={`tgl ${form[k] ? 'on' : ''}`}
-                onClick={() => set(k, !form[k])}
-                aria-label={title}
-              />
+              <p className="text-[11.5px] text-muted2 mt-2 font-mono">
+                At 60%, a $10,000 bankroll leaves the engine $4,000 to size against.
+              </p>
             </div>
-          ))}
-        </Panel>
-      </div>
+          </Panel>
 
-      <Panel
-        title="Connectivity"
-        tools={<ConnTag state={state} />}
-      >
-        <div className="grid grid-cols-2 gap-5 max-[980px]:grid-cols-1">
-          <Info label="Series tracked" value={(form.series_tickers ?? []).join(', ') || '—'} />
-          <Info label="Table prefix" value="kalshi_" />
-          <Info
-            label="Credentials"
-            value="Server-side only — never sent to the browser"
-          />
-          <Info label="Last updated" value={new Date(form.updated_at).toLocaleString()} />
-        </div>
-        <p className="text-[12.5px] text-muted mt-4">
-          API keys live in <span className="font-mono text-ace">server/.env</span> and are read only by the
-          backend. This page cannot display or change them by design.
-        </p>
-      </Panel>
-      </>
+          <Panel title="Mode">
+            {[
+              ['shadow_mode', 'Shadow mode',
+                'Evaluates and records every decision but sends no order to Kalshi. Turning this off commits real money.'],
+              ['shadow_auto_place', 'Place trades automatically',
+                'No pings to accept — the engine takes every position that clears its own rules.'],
+              ['cross_market_enabled', 'Confirm against sportsbooks',
+                'Requires the books to agree Kalshi is mispriced. Idle until an odds feed is connected.'],
+            ].map(([key, label, help]) => (
+              <label key={key} className="flex items-start gap-3 mb-4 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={key === 'cross_market_enabled'
+                    ? form[key] === true
+                    : form[key] !== false}
+                  onChange={e => set(key, e.target.checked)}
+                />
+                <span className="min-w-0">
+                  <span className="block text-[13.5px] font-medium">{label}</span>
+                  <span className="block text-[11.5px] text-muted2 font-mono mt-1">{help}</span>
+                </span>
+              </label>
+            ))}
+          </Panel>
+        </>
       )}
     </div>
   );

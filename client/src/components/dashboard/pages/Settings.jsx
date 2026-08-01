@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ChipBtn, Panel, Tag } from '../../common';
 import { api } from '../../../lib/api';
+import { ModelPanel } from './ModelPanel';
 import { useToast } from '../../Toasts';
 import { PageHead } from '../PageHead';
 import { ErrorBox, Loading } from '../Notices';
@@ -104,7 +105,9 @@ export default function Settings({ state, user, onUserChange }) {
     <div className="animate-page-in">
       <PageHead
         title="Settings"
-        sub={tab === 'strategy' ? 'Strategy, execution and connectivity' : 'Your account and desk access'}
+        sub={tab === 'strategy' ? 'The decisions only you can make — risk appetite, not arithmetic'
+          : tab === 'model' ? 'Derived from settled matches. Read-only by design.'
+          : 'Your account and desk access'}
         action={tab === 'strategy' && (
           <button className="btn btn-ace btn-sm" onClick={save} disabled={saving || !dirty || !isAdmin}>
             {saving ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}
@@ -114,10 +117,22 @@ export default function Settings({ state, user, onUserChange }) {
 
       <div className="flex gap-2 mb-5.5">
         <ChipBtn on={tab === 'strategy'} onClick={() => setTab('strategy')}>Strategy</ChipBtn>
+        <ChipBtn on={tab === 'model'} onClick={() => setTab('model')}>What the model works out</ChipBtn>
         <ChipBtn on={tab === 'account'} onClick={() => setTab('account')}>
           {isAdmin ? 'Account & team' : 'My account'}
         </ChipBtn>
       </div>
+
+      {tab === 'model' && (
+        <>
+          <div className="text-muted text-[13px] mb-5">
+            These are derived from settled results, not typed in. They refresh on every sync
+            and cannot be edited — a box beside a number the algorithm computes is just an
+            invitation to overrule it by hand.
+          </div>
+          <ModelPanel />
+        </>
+      )}
 
       {tab === 'account' && (
         <>

@@ -246,9 +246,14 @@ export async function settleResolvedTrades(kalshi, { limit = 40 } = {}) {
     const upd = await query(
       `update ${t('trades')} set status = 'settled', result = $2, settle_result = $3,
          settled_price_cents = $4, pnl_usd = $5, settled_at = now()
-       where ticker = $1 and status in ('filled','partial') and result is null
+       /* By id, not by ticker. The P&L above is derived from this row's own
+          entry price and size, and two trades on the same ticker can differ in
+          both, so a ticker-wide update wrote one position's result onto every
+          other — archived rows included. */
+       where id = $6 and archived_at is null
+         and status in ('filled','partial') and result is null
        returning id`,
-      [row.ticker, won ? 'won' : 'lost', result, payoutCents, pnl.toFixed(2)],
+      [row.ticker, won ? 'won' : 'lost', result, payoutCents, pnl.toFixed(2), row.id],
     );
     settled += upd.rowCount ?? 0;
   }
@@ -323,7 +328,8 @@ export async function evCapturedPerDay(days = 30) {
             coalesce(sum(tr.ev_pct * tr.stake_usd / 100.0), 0)::numeric as ev_usd,
             count(tr.id)::int as trades
      from d
-     left join ${t('trades')} tr on tr.placed_at::date = d.day
+     left join ${t('trades')} tr
+       on tr.placed_at::date = d.day and tr.archived_at is null
      group by d.day order by d.day`,
     [days],
   );
@@ -357,7 +363,8 @@ export async function overviewStats() {
          count(*) filter (where result = 'won')::int as won,
          count(*) filter (where result = 'void')::int as void
        from ${t('trades')} where archived_at is null`),
-    () => query(`select balance_cents, open_positions, captured_at from ${t('portfolio_snapshots')}
+    () => query(`select balance_cents, exposure_cents, realized_pnl_cents,
+                        open_positions, captured_at from ${t('portfolio_snapshots')}
            order by captured_at desc limit 1`),
     () => marketCount(),
     () => query(`select count(*)::int n from ${t('alerts')} where status = 'open'`),

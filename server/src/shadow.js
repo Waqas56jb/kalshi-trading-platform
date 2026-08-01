@@ -197,6 +197,7 @@ async function shadowPortfolio(cfg) {
   const open = await query(
     `select event_ticker, player_name, utr_bracket, stake_usd, ticker
      from ${t('shadow_trades')} where approved and result is null`);
+  const heldTickers = new Set(open.rows.map(r => r.ticker));
   for (const p of open.rows) {
     const cents = Math.round(Number(p.stake_usd) * 100);
     exposure.match[p.event_ticker] = (exposure.match[p.event_ticker] ?? 0) + cents;
@@ -217,6 +218,13 @@ async function shadowPortfolio(cfg) {
     dailyRealisedCents: todayCents,
     weeklyPeakCents: Math.max(bankrollCents, cfg.simulatedBankrollCents),
     exposure,
+    /* Tickers already holding an open position. They must not be re-sized: their
+       own stake sits inside `exposure`, so re-evaluating one has it compete with
+       itself for headroom, and the upsert then writes the smaller answer over the
+       original row. Left alone the recorded stake oscillated between $20 and
+       $9.85 every sixty seconds, and whichever figure the row happened to hold at
+       settlement was the one the P&L got booked on. */
+    heldTickers,
   };
 }
 
@@ -277,6 +285,9 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
 
   const decisions = [];
   for (const c of candidates) {
+    // an open position is a fact, not a decision to remake every minute
+    if (portfolio.heldTickers?.has(c.ticker)) continue;
+
     const book = bookByTicker.get(c.ticker);
 
     /* Markets pre-filtered out of the depth fetch still get evaluated, using the
@@ -286,8 +297,10 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
        and it buried the real reasons under a made-up one. */
     const asks = book?.asks?.length
       ? book.asks
-      : (c.yes_ask_cents != null
-        ? [{ price: c.yes_ask_cents / 100, contracts: Number(c.yes_ask_size ?? 0) || 1e6 }]
+      : (c.yes_ask_cents != null && Number(c.yes_ask_size) > 0
+        /* Only as much depth as is actually resting. Falling back to a million
+           contracts invented liquidity for exactly the quotes that had none. */
+        ? [{ price: c.yes_ask_cents / 100, contracts: Number(c.yes_ask_size) }]
         : []);
     const bestAskCents = book?.best_ask ?? c.yes_ask_cents;
 
@@ -368,8 +381,16 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
         (portfolio.exposure.player[c.player_name] ?? 0) + decision.stakeCents;
       portfolio.exposure.playerDaily[c.player_name] =
         (portfolio.exposure.playerDaily[c.player_name] ?? 0) + decision.stakeCents;
-      portfolio.exposure.bucket[bucket] =
-        (portfolio.exposure.bucket[bucket] ?? 0) + decision.stakeCents;
+      /* Key on the bucket the engine actually caps against — the shrunk
+         probability's — not the raw model's. They differ by design, so crediting
+         the raw one left the bucket cap permanently unconsumed. */
+      const capBucket = decision.bucket ?? bucket;
+      portfolio.exposure.bucket[capBucket] =
+        (portfolio.exposure.bucket[capBucket] ?? 0) + decision.stakeCents;
+      // the model-signal cap was initialised and never written, so it never bound
+      const signalId = c.model ?? 'utr_gap_v1';
+      portfolio.exposure.signal[signalId] =
+        (portfolio.exposure.signal[signalId] ?? 0) + decision.stakeCents;
     }
 
     decisions.push({ candidate: c, decision, bestAskCents, levels: book?.levels ?? 0 });
@@ -480,10 +501,12 @@ export async function settleShadowTrades() {
   const r = await query(
     `update ${t('shadow_trades')} st set
        result = case when m.result = 'yes' then 'won' else 'lost' end,
+       -- Kalshi rounds the fee up once for the whole order, so the ledger must
+       -- charge ceil(rate x contracts) rather than rate x contracts.
        pnl_usd = round(
          case when m.result = 'yes' then st.contracts * 1.0 else 0 end
          - st.stake_usd
-         - coalesce(st.contracts * st.fee_rate, 0), 2),
+         - ceil(coalesce(st.contracts * st.fee_rate, 0) * 100) / 100.0, 2),
        settled_at = coalesce(m.settled_at, now())
      from ${t('markets')} m
      where m.ticker = st.ticker

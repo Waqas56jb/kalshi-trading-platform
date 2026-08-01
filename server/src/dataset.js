@@ -42,12 +42,17 @@ export const COLUMNS = [
   // ---- ratings ----
   'player_utr', 'opponent_utr', 'utr_gap', 'player_utr_rated', 'opponent_utr_rated',
   // ---- model ----
-  'model_fair_prob', 'model_edge_cents', 'side_type',
+  // model_fair_prob is a function of the UTR pair only, so it is safe.
+  // The edge and the favourite/underdog label are not: both are recomputed from
+  // the live price on every sync, including after the match settles, so they
+  // carry the answer. Renamed rather than dropped, because they are still worth
+  // analysing — just never trained on.
+  'model_fair_prob', 'final_model_edge_cents', 'final_side_type',
   // ---- market, pre-match only ----
   'open_mid_cents', 'open_prob',
   'prematch_bid_cents', 'prematch_ask_cents', 'prematch_mid_cents', 'prematch_spread_cents',
   'prematch_prob', 'opponent_prematch_mid_cents', 'devig_prob', 'devig_overround',
-  'prematch_volume', 'prematch_open_interest', 'prematch_liquidity',
+  'prematch_volume',
   // ---- pre-match price dynamics ----
   'prematch_ticks', 'prematch_min_cents', 'prematch_max_cents', 'prematch_range_cents',
   'prematch_drift_cents', 'prematch_stddev_cents', 'hours_observed_prematch',
@@ -55,6 +60,7 @@ export const COLUMNS = [
   'close_time', 'match_dow', 'match_month',
   // ---- leakage: analysis only ----
   'final_mid_cents', 'final_last_price_cents', 'final_volume',
+  'final_open_interest', 'final_liquidity',
   // ---- target ----
   'settlement_value', 'won',
 ];
@@ -116,8 +122,8 @@ export async function buildDataset({ range = 'week' } = {}) {
        (op.utr_status = 'Rated')::int           as opponent_utr_rated,
 
        round(s.fair_cents::numeric / 100, 4)::float as model_fair_prob,
-       (s.fair_cents - s.market_cents)          as model_edge_cents,
-       s.side_type,
+       (s.fair_cents - s.market_cents)          as final_model_edge_cents,
+       s.side_type                              as final_side_type,
 
        h.first_c                                as open_mid_cents,
        round(h.first_c::numeric / 100, 4)::float as open_prob,
@@ -133,9 +139,12 @@ export async function buildDataset({ range = 'week' } = {}) {
             then round(h.last_c::numeric / (h.last_c + oh.last_c), 4) end::float as devig_prob,
        case when h.last_c + oh.last_c > 0
             then round((h.last_c + oh.last_c)::numeric / 100, 4) end::float      as devig_overround,
-       h.last_vol                               as prematch_volume,
-       m.open_interest::float                   as prematch_open_interest,
-       m.liquidity::float                       as prematch_liquidity,
+       -- volume is cut at prematch_end like every other price feature
+       h.last_vol::float                        as prematch_volume,
+       -- these two are not: kalshi_markets is overwritten on every sync, so the
+       -- only value available is the settled one. Named for what it is.
+       m.open_interest::float                   as final_open_interest,
+       m.liquidity::float                       as final_liquidity,
 
        h.ticks                                  as prematch_ticks,
        h.min_c                                  as prematch_min_cents,

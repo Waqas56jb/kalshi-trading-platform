@@ -24,10 +24,12 @@ import { fairFromGap } from './model.js';
    every match whether we bet it or not, so the usable sample is hundreds of
    rows rather than the nine positions actually taken. */
 const SETTLED_PREDICTIONS = `
-  select s.fair_cents, (m.result = 'yes')::int as won
+  select distinct on (m.event_ticker)
+         s.fair_cents, (m.result = 'yes')::int as won
   from ${t('markets')} m
   join ${t('signals')} s on s.ticker = m.ticker
-  where m.result in ('yes','no') and s.fair_cents is not null`;
+  where m.result in ('yes','no') and s.fair_cents is not null
+  order by m.event_ticker, m.ticker`;
 
 /**
  * Recomputes per-bucket calibration.
@@ -125,7 +127,8 @@ const BRACKETS = [
   { bracket: '0.1-0.25', low: 0.10, high: 0.25 },
   { bracket: '0.25-0.5', low: 0.25, high: 0.50 },
   { bracket: '0.5-1.0', low: 0.50, high: 1.00 },
-  { bracket: '1.0+', low: 1.00, high: 3.00 },
+  // open-ended: a strict 3.0 bound silently dropped every larger gap from the fit
+  { bracket: '1.0+', low: 1.00, high: Infinity },
 ];
 
 /**
@@ -197,7 +200,11 @@ export async function refitUtrCurve({ minSample = 40, priorWeight = 60 } = {}) {
      join ${t('markets')} opp on opp.event_ticker = m.event_ticker and opp.ticker <> m.ticker
      join ${t('players')} p  on p.competitor_id  = m.competitor_id
      join ${t('players')} op on op.competitor_id = opp.competitor_id
-     where m.result in ('yes','no') and p.utr is not null and op.utr is not null and p.utr <> op.utr`);
+     where m.result in ('yes','no') and p.utr is not null and op.utr is not null and p.utr <> op.utr
+       -- one row per match. The self-join yields both orderings, and counting
+       -- both doubled every sample size, which halved the shrinkage a thin
+       -- bracket was supposed to receive from the prior.
+       and m.ticker < opp.ticker`);
 
   if (!rows.length) return { fitted: 0, sample: 0 };
 
@@ -259,6 +266,14 @@ export async function refitUtrCurve({ minSample = 40, priorWeight = 60 } = {}) {
       fitted.map(f => f.sampleSize), fitted.map(f => f.rawWinRate), fitted.map(f => f.fittedCents),
       fitted.map(f => f.meanGap), fitted.map(f => f.rawWinRate), fitted.map(f => f.shrunkCents)],
   );
+
+  /* Brackets with too thin a sample this run are removed rather than left at
+     their old value. A stale row sits in the table alongside freshly fitted ones
+     and can invert the loaded curve, which is the whole thing monotonicity was
+     added to prevent. */
+  await query(
+    `delete from ${t('utr_curve')} where bracket <> all($1::text[])`,
+    [fitted.map(f => f.bracket)]);
 
   return { fitted: fitted.length, sample: rows.length, detail: fitted };
 }

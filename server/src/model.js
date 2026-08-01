@@ -114,8 +114,11 @@ export function fairFromFittedCurve(gap, curve) {
     p = span <= 0 ? b.cents : a.cents + ((g - a.gap) / span) * (b.cents - a.cents);
   }
 
-  const cents = sign > 0 ? p : 100 - p;
-  return Math.max(1, Math.min(99, Math.round(cents)));
+  /* Round once, on the higher-rated player's side, then mirror. Rounding after
+     the flip rounds both sides independently, and a half-cent interpolation then
+     produced two prices for one match that summed to 101. */
+  const rounded = Math.max(1, Math.min(99, Math.round(p)));
+  return sign > 0 ? rounded : 100 - rounded;
 }
 
 export function fairFromGap(gap) {
@@ -129,8 +132,9 @@ export function fairFromGap(gap) {
   else if (g >= 0.5) p = 65 + (g - 0.5) * 40;
   else p = 50 + g * 30;
 
-  const cents = sign > 0 ? p : 100 - p;
-  return Math.max(1, Math.min(99, Math.round(cents)));
+  // rounded once and mirrored, so the two sides of a match always sum to 100
+  const rounded = Math.max(1, Math.min(99, Math.round(p)));
+  return sign > 0 ? rounded : 100 - rounded;
 }
 
 /**

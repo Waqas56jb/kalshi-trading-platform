@@ -21,10 +21,30 @@
 
 const clamp01 = v => Math.min(1, Math.max(0, v));
 
-/** Kalshi's actual fee: 7% of price × (1 − price) per contract, rounded up. */
+/**
+ * Kalshi's fee: ceil(0.07 × contracts × price × (1 − price)), rounded up to the
+ * cent ONCE for the whole order.
+ *
+ * The rounding sits outside the contract count. Applying the ceiling per
+ * contract charges a whole cent on a fee that is often a fraction of one — at
+ * 10c the true rate is 0.63c and the per-contract ceiling bills 1c, a 59%
+ * overcharge that then propagates into every edge, ROI and Kelly figure.
+ */
+export function kalshiOrderFeeCents(priceDollars, contracts) {
+  const p = clamp01(priceDollars);
+  return Math.ceil(0.07 * contracts * p * (1 - p) * 100);
+}
+
+/**
+ * The unrounded per-contract rate, for the pre-sizing economics.
+ *
+ * Sizing has to price the fee before it knows the contract count, so it uses the
+ * exact rate rather than a rounded one. The cent-rounding is applied once at
+ * order level by `kalshiOrderFeeCents` after the size is known.
+ */
 export function kalshiFeeRate(priceDollars) {
   const p = clamp01(priceDollars);
-  return Math.ceil(0.07 * p * (1 - p) * 100) / 100;
+  return 0.07 * p * (1 - p);
 }
 
 export function probabilityBucket(p) {

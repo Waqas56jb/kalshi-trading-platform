@@ -203,3 +203,77 @@ export async function datasetSummary({ range = 'week' } = {}) {
     target: TARGET_COLUMN,
   };
 }
+
+/* ------------------------------------------------------------- breakdowns */
+
+/**
+ * The profitability breakdowns the client asked for: by month, by day of week,
+ * by round, and men's against women's.
+ *
+ * Measured on the model's own calls rather than on trades, for the same reason
+ * calibration is: nine settled positions cannot support a breakdown, but several
+ * hundred settled predictions can. `model_hit` is whether the side the model
+ * priced above the market actually won.
+ */
+export async function buildBreakdowns({ range = 'all' } = {}) {
+  const { rows } = await buildDataset({ range });
+
+  const scored = rows.filter(r => r.model_fair_prob != null && r.prematch_prob != null);
+  const summarise = keyFn => {
+    const groups = new Map();
+    for (const r of scored) {
+      const key = keyFn(r);
+      if (key == null || key === '') continue;
+      if (!groups.has(key)) groups.set(key, { key, matches: 0, model_liked: 0, hits: 0, edge: 0 });
+      const g = groups.get(key);
+      g.matches += 1;
+      // the model "likes" a side when its fair value sits above the market price
+      const liked = r.model_fair_prob > r.prematch_prob;
+      if (liked) {
+        g.model_liked += 1;
+        g.hits += r.won;
+        g.edge += (r.model_fair_prob - r.prematch_prob) * 100;
+      }
+    }
+    return [...groups.values()]
+      .map(g => ({
+        key: g.key,
+        matches: Math.round(g.matches / 2),
+        model_picks: g.model_liked,
+        picks_won: g.hits,
+        hit_rate: g.model_liked ? +(g.hits / g.model_liked).toFixed(3) : null,
+        avg_claimed_edge_cents: g.model_liked ? +(g.edge / g.model_liked).toFixed(1) : null,
+      }))
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)));
+  };
+
+  const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const MONTH = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
+  return {
+    range,
+    rows: scored.length,
+    by_month: summarise(r => (r.match_month ? MONTH[r.match_month] : null)),
+    by_day_of_week: summarise(r => (r.match_dow != null ? DOW[r.match_dow] : null)),
+    by_round: summarise(r => r.round),
+    by_tour: summarise(r => r.tour),
+    by_tour_level: summarise(r => r.tour_level),
+  };
+}
+
+/** Flattens the breakdowns into one sheet, so CSV and Excel can carry them all. */
+export function breakdownRows(breakdowns) {
+  const out = [];
+  for (const [dimension, key] of [
+    ['Month', 'by_month'], ['Day of week', 'by_day_of_week'], ['Round', 'by_round'],
+    ['Tour', 'by_tour'], ['Tour level', 'by_tour_level'],
+  ]) {
+    for (const row of breakdowns[key] ?? []) out.push({ dimension, ...row });
+  }
+  return out;
+}
+
+export const BREAKDOWN_COLUMNS = [
+  'dimension', 'key', 'matches', 'model_picks', 'picks_won', 'hit_rate', 'avg_claimed_edge_cents',
+];

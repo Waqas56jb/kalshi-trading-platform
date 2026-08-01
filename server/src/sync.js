@@ -4,6 +4,8 @@ import { snapshotPortfolio, autoSellAtFair } from './orders.js';
 import { importKalshiHistory } from './importer.js';
 import { backfillRatings } from './ratings.js';
 import { syncSettlements } from './settlements.js';
+import { runShadowCycle, settleShadowTrades } from './shadow.js';
+import { recomputeCalibration, refitUtrCurve, loadUtrCurve } from './calibration.js';
 import { query, tx } from './db.js';
 import {
   buildSignalsForEvent, classifySchedule, dayIn, dollarsToCents, looksInPlay,
@@ -206,6 +208,11 @@ async function bookActivity(client, tickers) {
 }
 
 async function computeSignals(client, rows, settings) {
+  /* The curve fitted to settled matches, when one exists. Loaded per sync rather
+     than cached in module scope so a refit takes effect on the next cycle
+     instead of the next deploy. */
+  const curve = await loadUtrCurve().catch(() => []);
+
   const ids = [...new Set(rows.map(r => r.competitor_id).filter(Boolean))];
   const players = new Map();
   if (ids.length) {
@@ -221,7 +228,7 @@ async function computeSignals(client, rows, settings) {
   }
 
   const signals = [];
-  for (const ms of byEvent.values()) signals.push(...buildSignalsForEvent(ms, players));
+  for (const ms of byEvent.values()) signals.push(...buildSignalsForEvent(ms, players, curve));
   const rated = signals.filter(s => s.fair_cents != null && s.market_cents != null);
   if (!rated.length) return { computed: 0, actionable: 0 };
 
@@ -514,6 +521,21 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     const settled = await syncSettlements(kalshi, { maxPages: 1 })
       .catch(() => ({ updated: 0 }));
 
+    /* Shadow trading, run here rather than on its own timer so the risk engine
+       sees signals seconds old rather than a minute old. Its staleness gate is
+       there to stop us acting on a quote the market has moved past, and running
+       it out of band would have it rejecting everything on age alone. */
+    const shadow = await runShadowCycle(kalshi).catch(e => ({
+      error: String(e.message).slice(0, 160),
+    }));
+    await settleShadowTrades().catch(() => null);
+
+    /* Re-measure the model against everything that has settled, and re-fit the
+       UTR curve. Cheap, and it means the curve improves on its own instead of
+       waiting for someone to notice it has drifted. */
+    await recomputeCalibration({ minSample: 40 }).catch(() => null);
+    await refitUtrCurve({ minSample: 40 }).catch(() => null);
+
     /* Run the exit rules — take-profit, stop-loss and sell-at-fair.
        These used to be reached only from the reconcile cron, which has never run
        because its repository secrets were never set, so positions sailed past
@@ -535,9 +557,10 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     if (verbose) {
       console.log(`  events=${out.events} markets=${rows.length} ticks=${out.ticks} ` +
         `signals=${out.computed} actionable=${out.actionable} alerts+${out.created}/-${out.expired} ` +
-        `exits=${exits.closed ?? 0} settled+${settled.updated ?? 0} ${latency}ms`);
+        `exits=${exits.closed ?? 0} settled+${settled.updated ?? 0} ` +
+        `shadow=${shadow.approved ?? 0}/${shadow.evaluated ?? 0} ${latency}ms`);
     }
-    return { ok: true, runId, latency, marketsSeen: rows.length, ...out, exits, settled };
+    return { ok: true, runId, latency, marketsSeen: rows.length, ...out, exits, settled, shadow };
   } catch (e) {
     await query(
       `update ${t('sync_runs')} set status='error', finished_at=now(), error=$2, latency_ms=$3 where id=$1`,

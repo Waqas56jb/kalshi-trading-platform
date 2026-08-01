@@ -134,9 +134,21 @@ export const api = {
 
   sync: () => call('POST', '/api/sync'),
 
+  /* ---- shadow desk ---- */
+  shadowSummary: () => get('/api/shadow/summary'),
+  shadowDecisions: (approved, limit = 100) =>
+    get(`/api/shadow/decisions?approved=${approved}&limit=${limit}`),
+  shadowRun: () => call('POST', '/api/shadow/run'),
+  calibration: () => get('/api/calibration'),
+  recalibrate: () => call('POST', '/api/calibration/recompute'),
+
   /* ---- training dataset ---- */
   datasetSummary: range => get(`/api/dataset/summary?range=${range}`),
   datasetSchema: () => get('/api/dataset/schema'),
+  breakdowns: range => get(`/api/dataset/breakdowns?range=${range}`),
+  breakdownsExport: (range, format) =>
+    download(`/api/dataset/breakdowns/export?range=${range}&format=${format}`,
+      `courtedge-breakdowns-${range}.${format}`),
   datasetExport: (range, format) =>
     download(`/api/dataset/export?range=${range}&format=${format}`,
       `courtedge-tennis-${range}.${format}`),

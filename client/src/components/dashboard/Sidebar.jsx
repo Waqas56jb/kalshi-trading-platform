@@ -5,6 +5,7 @@ const NAV = [
   { id: 'overview', label: 'Overview', Ic: IconGrid },
   { id: 'markets', label: 'Live markets', Ic: IconActivity },
   { id: 'alerts', label: 'Alerts', Ic: IconBell, badge: true },
+  { id: 'shadow', label: 'Shadow desk', Ic: IconChart },
   { id: 'trades', label: 'Trade history', Ic: IconChart },
   { id: 'analytics', label: 'Analytics', Ic: IconPie },
 ];

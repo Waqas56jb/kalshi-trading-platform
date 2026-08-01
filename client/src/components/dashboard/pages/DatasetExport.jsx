@@ -35,12 +35,14 @@ export function DatasetExport() {
     return () => { live = false; };
   }, [range]);
 
-  const save = async format => {
-    setBusy(format);
+  const save = async (format, kind = 'dataset') => {
+    setBusy(`${kind}:${format}`);
     setError(null);
     setDone(null);
     try {
-      const bytes = await api.datasetExport(range, format);
+      const bytes = kind === 'breakdowns'
+        ? await api.breakdownsExport(range, format)
+        : await api.datasetExport(range, format);
       setDone(`Saved ${format.toUpperCase()} · ${(bytes / 1024).toFixed(0)} KB`);
     } catch (e) {
       setError(e.message);
@@ -65,7 +67,8 @@ export function DatasetExport() {
       ))}
     >
       <div className="text-muted text-[13px] mb-4">
-        Settled matches with the outcome attached, for model training.
+        Settled matches with the outcome attached, for model training. The breakdowns
+        split the same data by month, day of week, round, and men's against women's.
       </div>
 
       {summary ? (
@@ -104,14 +107,29 @@ export function DatasetExport() {
           disabled={busy != null || empty}
           onClick={() => save('csv')}
         >
-          {busy === 'csv' ? 'Preparing…' : 'Download CSV'}
+          {busy === 'dataset:csv' ? 'Preparing…' : 'Download CSV'}
         </button>
         <button
           className="btn btn-sm"
           disabled={busy != null || empty}
           onClick={() => save('xlsx')}
         >
-          {busy === 'xlsx' ? 'Preparing…' : 'Download Excel'}
+          {busy === 'dataset:xlsx' ? 'Preparing…' : 'Download Excel'}
+        </button>
+        <span className="w-px h-6 bg-line mx-1" />
+        <button
+          className="btn btn-sm"
+          disabled={busy != null || empty}
+          onClick={() => save('xlsx', 'breakdowns')}
+        >
+          {busy === 'breakdowns:xlsx' ? 'Preparing…' : 'Breakdowns (Excel)'}
+        </button>
+        <button
+          className="btn btn-sm"
+          disabled={busy != null || empty}
+          onClick={() => save('csv', 'breakdowns')}
+        >
+          {busy === 'breakdowns:csv' ? 'Preparing…' : 'Breakdowns (CSV)'}
         </button>
         {done && <Tag className="bg-ace/15 text-ace">{done}</Tag>}
         {empty && <span className="text-muted text-[13px]">No settled matches in this range yet.</span>}

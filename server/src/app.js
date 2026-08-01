@@ -1,13 +1,16 @@
 import express from 'express';
 import cors from 'cors';
-import { config, configErrors } from './config.js';
-import { ping } from './db.js';
+import { config, configErrors, t } from './config.js';
+import { ping, query } from './db.js';
 import { clientFromEnv } from './kalshi.js';
 import { runSync, reapStaleRuns, maybeAutoSync } from './sync.js';
 import {
-  buildDataset, datasetSummary, COLUMNS, FEATURE_COLUMNS, TARGET_COLUMN, RANGE_NAMES,
+  buildDataset, datasetSummary, buildBreakdowns, breakdownRows,
+  COLUMNS, FEATURE_COLUMNS, TARGET_COLUMN, RANGE_NAMES, BREAKDOWN_COLUMNS,
 } from './dataset.js';
 import { toCsv, toXlsx } from './xlsx.js';
+import { runShadowCycle, shadowSummary, loadRiskConfig } from './shadow.js';
+import { recomputeCalibration, refitUtrCurve, loadUtrCurve } from './calibration.js';
 import {
   autoSellAtFair, checkKalshiAuth, closePosition, executeAlert, getAuthState, livePositions,
   reconcileTrades, snapshotPortfolio,
@@ -392,6 +395,74 @@ export function createApp() {
     res.json({ pnl: await repo.pnlSeries(Math.min(Number(req.query.days) || 30, 90)) });
   }));
 
+  /* ----------------------------------------------------------------- shadow */
+
+  /** Simulated performance, plus the per-bracket breakdown the client asked for. */
+  api.get('/shadow/summary', requireAuth, h(async (_req, res) => {
+    const [summary, cfg] = await Promise.all([shadowSummary(), loadRiskConfig()]);
+    res.json({
+      summary,
+      mode: {
+        shadow: cfg.shadowMode,
+        autoPlace: cfg.shadowAutoPlace,
+        bankroll: cfg.simulatedBankrollCents / 100,
+        cashReservePct: Math.round(cfg.minimumFreeCashFraction * 100),
+        minPriceCents: cfg.minPriceCents,
+        crossMarket: cfg.crossMarketEnabled,
+      },
+    });
+  }));
+
+  /**
+   * Every decision, approved and rejected alike.
+   *
+   * Rejections are the point of this endpoint. A gate that silently drops
+   * opportunities is how the old 0.5 UTR minimum went unnoticed while it was
+   * costing 68 signals a day.
+   */
+  api.get('/shadow/decisions', requireAuth, h(async (req, res) => {
+    const approved = req.query.approved;
+    const limit = Math.min(300, Number(req.query.limit) || 100);
+    const filter = approved === 'true' ? 'where approved'
+      : approved === 'false' ? 'where not approved' : '';
+    const r = await query(
+      `select ticker, player_name, opponent_name, side, utr_gap, utr_bracket,
+              model_probability, market_reference, conservative_prob,
+              best_ask_cents, expected_vwap_cents, max_price_cents, book_depth_levels,
+              approved, net_edge, expected_roi, full_kelly, kelly_multiplier,
+              base_cap_fraction, edge_scaling_mult, effective_cap, throttle_multiplier,
+              stake_usd, contracts, limiting_constraint, rejection_reason,
+              result, pnl_usd, match_date, created_at
+       from ${t('shadow_trades')} ${filter}
+       order by approved desc, abs(coalesce(net_edge,0)) desc, created_at desc
+       limit $1`, [limit]);
+    res.json({ decisions: r.rows });
+  }));
+
+  api.post('/shadow/run', requireAuth, h(async (_req, res) => {
+    res.json(await runShadowCycle(kalshi, { verbose: false }));
+  }));
+
+  /* ------------------------------------------------------------ calibration */
+
+  api.get('/calibration', requireAuth, h(async (_req, res) => {
+    const [buckets, curve] = await Promise.all([
+      query(`select bucket, sample_size, mean_predicted, actual_rate,
+                    calibration_error, verified, computed_at
+             from ${t('calibration')} order by bucket`),
+      loadUtrCurve(),
+    ]);
+    res.json({ buckets: buckets.rows, curve });
+  }));
+
+  api.post('/calibration/recompute', requireAuth, h(async (_req, res) => {
+    const [calibration, curve] = await Promise.all([
+      recomputeCalibration({ minSample: 40 }),
+      refitUtrCurve({ minSample: 40 }),
+    ]);
+    res.json({ calibration, curve });
+  }));
+
   /* ---------------------------------------------------------------- dataset */
 
   api.get('/dataset/summary', requireAuth, h(async (req, res) => {
@@ -425,6 +496,34 @@ export function createApp() {
     res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
     res.setHeader('Content-Length', body.length);
     // the browser must be able to read the filename back out of a fetch() response
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.send(body);
+  }));
+
+  /** Profitability by month, day of week, round, and men's against women's. */
+  api.get('/dataset/breakdowns', requireAuth, h(async (req, res) => {
+    const range = String(req.query.range ?? 'all');
+    if (!RANGE_NAMES.includes(range)) return res.status(400).json({ error: 'bad_range' });
+    res.json(await buildBreakdowns({ range }));
+  }));
+
+  api.get('/dataset/breakdowns/export', requireAuth, h(async (req, res) => {
+    const range = String(req.query.range ?? 'all');
+    const format = String(req.query.format ?? 'csv').toLowerCase();
+    if (!RANGE_NAMES.includes(range)) return res.status(400).json({ error: 'bad_range' });
+    if (!['csv', 'xlsx'].includes(format)) return res.status(400).json({ error: 'bad_format' });
+
+    const rows = breakdownRows(await buildBreakdowns({ range }));
+    if (!rows.length) return res.status(404).json({ error: 'no_settled_matches_in_range' });
+
+    const name = `courtedge-breakdowns-${range}.${format}`;
+    const body = format === 'xlsx'
+      ? toXlsx(BREAKDOWN_COLUMNS, rows, 'breakdowns')
+      : toCsv(BREAKDOWN_COLUMNS, rows);
+    res.setHeader('Content-Type', format === 'xlsx'
+      ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      : 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
     res.send(body);
   }));

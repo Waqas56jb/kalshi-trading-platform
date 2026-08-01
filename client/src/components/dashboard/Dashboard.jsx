@@ -7,6 +7,7 @@ import Markets from './pages/Markets';
 import Alerts from './pages/Alerts';
 import Trades from './pages/Trades';
 import Analytics from './pages/Analytics';
+import Shadow from './pages/Shadow';
 import Settings from './pages/Settings';
 import { usePoll } from '../../hooks/useApi';
 import { useAlertNotifier } from '../../hooks/useAlertNotifier';
@@ -168,6 +169,7 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
           )}
           {page === 'trades' && <Trades user={user} />}
           {page === 'analytics' && <Analytics />}
+          {page === 'shadow' && <Shadow />}
           {page === 'settings' && (
             <Settings state={settings} user={user} onUserChange={onUserChange} />
           )}

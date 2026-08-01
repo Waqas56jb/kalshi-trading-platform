@@ -70,6 +70,51 @@ export function parseMarketTitle(title = '', rules = '') {
  * landing page: Δ2.0+ → ~99%, Δ1.0 → 85–90%, Δ0.5 → ~65%, Δ0 → ~50%.
  * `gap` is (this player's UTR − opponent's UTR) and may be negative.
  */
+/**
+ * Fair value from a curve fitted to settled matches, rather than from the
+ * hand-written breakpoints below.
+ *
+ * Two problems with the original are fixed here. It was never fitted to
+ * anything — the numbers were an estimate, and measured against 756 settled
+ * matches it says 65% at a 0.5 gap where the real rate is 78%. And it moved in
+ * coarse segments, which is the substance of the client's complaint that a 0.1
+ * gap and a 0.49 gap were being treated alike: they sat in the same segment.
+ *
+ * The fitted curve interpolates between bracket midpoints, so the output moves
+ * continuously with the gap and scales inside a tier as well as between tiers.
+ * Falls back to the original curve while a bracket still lacks the sample to be
+ * worth trusting.
+ */
+export function fairFromFittedCurve(gap, curve) {
+  if (gap === null || gap === undefined || !Number.isFinite(gap)) return null;
+  if (!curve?.length) return fairFromGap(gap);
+
+  const sign = gap < 0 ? -1 : 1;
+  const g = Math.abs(gap);
+
+  // anchor at an even split for an identical pair, then each bracket's midpoint
+  const points = [{ gap: 0, cents: 50 }];
+  for (const b of curve) {
+    points.push({ gap: (b.low + b.high) / 2, cents: b.fittedCents });
+  }
+  points.sort((a, b) => a.gap - b.gap);
+
+  let p;
+  if (g >= points[points.length - 1].gap) {
+    p = points[points.length - 1].cents;
+  } else {
+    let i = 0;
+    while (i < points.length - 1 && points[i + 1].gap < g) i += 1;
+    const a = points[i];
+    const b = points[i + 1];
+    const span = b.gap - a.gap;
+    p = span <= 0 ? b.cents : a.cents + ((g - a.gap) / span) * (b.cents - a.cents);
+  }
+
+  const cents = sign > 0 ? p : 100 - p;
+  return Math.max(1, Math.min(99, Math.round(cents)));
+}
+
 export function fairFromGap(gap) {
   if (gap === null || gap === undefined || !Number.isFinite(gap)) return null;
   const sign = gap < 0 ? -1 : 1;
@@ -110,7 +155,7 @@ export function midPrice(m) {
  * Builds signals for the two markets of one event.
  * `players` maps competitor_id -> { name, utr }.
  */
-export function buildSignalsForEvent(markets, players) {
+export function buildSignalsForEvent(markets, players, curve = null) {
   if (markets.length !== 2) return [];       // only head-to-head binaries are modelled
 
   return markets.map((m, i) => {
@@ -121,7 +166,11 @@ export function buildSignalsForEvent(markets, players) {
     const oppUtr = you?.utr != null ? Number(you.utr) : null;
 
     const gap = myUtr != null && oppUtr != null ? +(myUtr - oppUtr).toFixed(2) : null;
-    const fair = fairFromGap(gap);
+    /* Prefer the curve fitted to settled matches. The hand-written fallback
+       says 65c at a 0.5 gap where the measured rate is 78c, and moves in coarse
+       segments that gave a 0.1 gap and a 0.49 gap near-identical prices — the
+       client raised exactly that. */
+    const fair = curve?.length ? fairFromFittedCurve(gap, curve) : fairFromGap(gap);
     const price = executablePrice(m);
     const ev = fair != null ? evPct(fair, price) : null;
 

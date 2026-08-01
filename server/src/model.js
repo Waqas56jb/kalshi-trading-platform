@@ -92,10 +92,13 @@ export function fairFromFittedCurve(gap, curve) {
   const sign = gap < 0 ? -1 : 1;
   const g = Math.abs(gap);
 
-  // anchor at an even split for an identical pair, then each bracket's midpoint
+  /* Anchor at an even split for an identical pair, then each bracket at the mean
+     gap actually seen inside it. The arithmetic midpoint put the top bracket's
+     anchor at 2.0, well beyond where real matches sit, which flattened every gap
+     above 0.75 onto one price. */
   const points = [{ gap: 0, cents: 50 }];
   for (const b of curve) {
-    points.push({ gap: (b.low + b.high) / 2, cents: b.fittedCents });
+    points.push({ gap: b.meanGap ?? (b.low + b.high) / 2, cents: b.fittedCents });
   }
   points.sort((a, b) => a.gap - b.gap);
 

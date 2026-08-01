@@ -176,7 +176,7 @@ export const getAlert = async id => {
 export async function listTrades({ filter = 'all', limit = 200 } = {}) {
   const r = await query(
     `select * from ${t('trades')}
-     where case $1
+     where archived_at is null and case $1
              when 'won'  then result = 'won'
              when 'lost' then result = 'lost'
              when 'open' then status in ('pending','filled','partial')
@@ -217,7 +217,7 @@ export async function settleResolvedTrades(kalshi, { limit = 40 } = {}) {
   const open = await query(
     `select distinct on (tr.ticker) tr.id, tr.ticker, tr.side, tr.entry_cents, tr.size_contracts
      from ${t('trades')} tr
-     where tr.status in ('filled','partial') and tr.result is null
+     where tr.archived_at is null and tr.status in ('filled','partial') and tr.result is null
      order by tr.ticker, tr.id
      limit $1`, [limit]);
 
@@ -272,6 +272,7 @@ export async function pnlSeries(days = 30) {
      from d
      left join ${t('trades')} tr
        on tr.placed_at::date = d.day and tr.status = 'settled'
+       and tr.archived_at is null
      group by d.day order by d.day`,
     [days],
   );
@@ -294,7 +295,7 @@ export async function pnlByGapBucket() {
             count(tr.id)::int as trades
      from ${t('trades')} tr
      join ${t('signals')} s on s.ticker = tr.ticker
-     where tr.status = 'settled'
+     where tr.archived_at is null and tr.status = 'settled'
      group by bucket order by bucket`,
   );
   return r.rows.map(x => ({ ...x, pnl: Number(x.pnl) }));
@@ -305,7 +306,7 @@ export async function winRate() {
     `select count(*) filter (where result = 'won')::int  as won,
             count(*) filter (where result = 'lost')::int as lost,
             count(*) filter (where status = 'settled')::int as settled
-     from ${t('trades')}`,
+     from ${t('trades')} where archived_at is null`,
   );
   return r.rows[0];
 }
@@ -355,7 +356,7 @@ export async function overviewStats() {
          count(*) filter (where result in ('won','lost'))::int as settled,
          count(*) filter (where result = 'won')::int as won,
          count(*) filter (where result = 'void')::int as void
-       from ${t('trades')}`),
+       from ${t('trades')} where archived_at is null`),
     () => query(`select balance_cents, open_positions, captured_at from ${t('portfolio_snapshots')}
            order by captured_at desc limit 1`),
     () => marketCount(),

@@ -1,6 +1,7 @@
 import { t } from './config.js';
 import { query } from './db.js';
 import { probabilityBucket, utrBracket } from './risk.js';
+import { fairFromGap } from './model.js';
 
 /**
  * Measures how well the model actually predicts, and re-fits the UTR curve from
@@ -134,7 +135,61 @@ const BRACKETS = [
  * bracket, and `fairFromFittedCurve` interpolates between bracket midpoints so
  * the output moves smoothly with the gap instead of stepping.
  */
-export async function refitUtrCurve({ minSample = 40 } = {}) {
+/**
+ * Enforces that a larger rating gap never prices lower than a smaller one.
+ *
+ * Pool-adjacent-violators: where two neighbouring brackets are out of order they
+ * are merged into their sample-weighted average, repeatedly, until the sequence
+ * only rises. It is the standard isotonic fit, and it moves the numbers as
+ * little as the constraint allows.
+ *
+ * The constraint is not a statistical preference, it is a fact about tennis: a
+ * player rated further above their opponent cannot be less likely to win. Four
+ * days of data produced 62c at a 0.1-0.25 gap and 57c at 0.25-0.5, which
+ * inverted the curve and left two different deltas returning the same fair
+ * price. The client spotted that on the terminal before I did.
+ */
+function enforceMonotonic(points) {
+  const blocks = points.map(p => ({ sum: p.value * p.weight, weight: p.weight, items: [p] }));
+  let i = 0;
+  while (i < blocks.length - 1) {
+    const a = blocks[i];
+    const b = blocks[i + 1];
+    if (a.sum / a.weight <= b.sum / b.weight) { i += 1; continue; }
+    blocks.splice(i, 2, {
+      sum: a.sum + b.sum,
+      weight: a.weight + b.weight,
+      items: [...a.items, ...b.items],
+    });
+    if (i > 0) i -= 1;                       // a merge can violate the pair before it
+  }
+  const out = [];
+  for (const block of blocks) {
+    const value = block.sum / block.weight;
+    for (const item of block.items) out.push({ ...item, value });
+  }
+  return out;
+}
+
+/**
+ * Fits the curve from settled matches.
+ *
+ * Three things the first version got wrong, all of which the client saw in the
+ * terminal before I did.
+ *
+ * Each bracket is anchored at the mean gap actually observed inside it, not the
+ * arithmetic midpoint. The top bracket spans 1.0 to 3.0, so anchoring it at 2.0
+ * put the curve's last point beyond any real match and flattened every gap above
+ * 0.75 onto a single price.
+ *
+ * Thin brackets are shrunk toward the original curve rather than believed
+ * outright. Fifty-two matches is not enough to conclude that a two-point rating
+ * advantage is worth 77c when the prior says 99c.
+ *
+ * And the result is forced monotonic, because a bigger gap losing value is not a
+ * finding, it is noise.
+ */
+export async function refitUtrCurve({ minSample = 40, priorWeight = 60 } = {}) {
   const { rows } = await query(
     `select abs(p.utr - op.utr) as gap,
             case when p.utr > op.utr then (m.result = 'yes') else (m.result = 'no') end as higher_won
@@ -146,7 +201,7 @@ export async function refitUtrCurve({ minSample = 40 } = {}) {
 
   if (!rows.length) return { fitted: 0, sample: 0 };
 
-  const fitted = [];
+  const measured = [];
   for (const b of BRACKETS) {
     const inBracket = rows.filter(r => {
       const g = Number(r.gap);
@@ -155,29 +210,54 @@ export async function refitUtrCurve({ minSample = 40 } = {}) {
     if (inBracket.length < minSample) continue;
 
     const wins = inBracket.filter(r => r.higher_won).length;
-    const rate = wins / inBracket.length;
-    fitted.push({
+    const meanGap = inBracket.reduce((s, r) => s + Number(r.gap), 0) / inBracket.length;
+    const observed = (wins / inBracket.length) * 100;
+    const prior = fairFromGap(meanGap);
+
+    /* Sample-weighted blend with the prior. A bracket with thousands of matches
+       lands essentially on its observed rate; one with fifty stays close to the
+       curve we started from. */
+    const n = inBracket.length;
+    const shrunk = (n * observed + priorWeight * prior) / (n + priorWeight);
+
+    measured.push({
       ...b,
-      sampleSize: inBracket.length,
-      winRate: +rate.toFixed(4),
-      /* Never emit a fair value below an even split for the higher-rated player:
-         a fitted rate under 50% on a thin bracket is noise, not a claim that
-         being better rated makes you lose. */
-      fittedCents: Math.max(50, Math.min(99, Math.round(rate * 100))),
+      sampleSize: n,
+      meanGap: +meanGap.toFixed(3),
+      rawWinRate: +(wins / n).toFixed(4),
+      observedCents: Math.round(observed),
+      shrunkCents: Math.round(shrunk),
+      value: shrunk,
+      weight: n,
     });
   }
 
-  if (!fitted.length) return { fitted: 0, sample: rows.length };
+  if (!measured.length) return { fitted: 0, sample: rows.length };
+
+  measured.sort((a, b) => a.meanGap - b.meanGap);
+  const monotonic = enforceMonotonic(measured);
+
+  const fitted = monotonic.map(m => ({
+    ...m,
+    // the higher-rated player is never priced below an even split
+    fittedCents: Math.max(50, Math.min(99, Math.round(m.value))),
+  }));
 
   await query(
-    `insert into ${t('utr_curve')} (bracket, gap_low, gap_high, sample_size, win_rate, fitted_cents, computed_at)
-     select * from unnest($1::text[], $2::numeric[], $3::numeric[], $4::int[], $5::numeric[], $6::int[])
-       as x(b, lo, hi, n, wr, fc), lateral (select now()) ts(c)
+    `insert into ${t('utr_curve')}
+       (bracket, gap_low, gap_high, sample_size, win_rate, fitted_cents,
+        mean_gap, raw_win_rate, shrunk_cents, computed_at)
+     select * from unnest($1::text[], $2::numeric[], $3::numeric[], $4::int[], $5::numeric[],
+                          $6::int[], $7::numeric[], $8::numeric[], $9::int[])
+       as x(b, lo, hi, n, wr, fc, mg, rwr, sc), lateral (select now()) ts(c)
      on conflict (bracket) do update set
        sample_size = excluded.sample_size, win_rate = excluded.win_rate,
-       fitted_cents = excluded.fitted_cents, computed_at = now()`,
+       fitted_cents = excluded.fitted_cents, mean_gap = excluded.mean_gap,
+       raw_win_rate = excluded.raw_win_rate, shrunk_cents = excluded.shrunk_cents,
+       gap_low = excluded.gap_low, gap_high = excluded.gap_high, computed_at = now()`,
     [fitted.map(f => f.bracket), fitted.map(f => f.low), fitted.map(f => f.high),
-      fitted.map(f => f.sampleSize), fitted.map(f => f.winRate), fitted.map(f => f.fittedCents)],
+      fitted.map(f => f.sampleSize), fitted.map(f => f.rawWinRate), fitted.map(f => f.fittedCents),
+      fitted.map(f => f.meanGap), fitted.map(f => f.rawWinRate), fitted.map(f => f.shrunkCents)],
   );
 
   return { fitted: fitted.length, sample: rows.length, detail: fitted };
@@ -186,14 +266,20 @@ export async function refitUtrCurve({ minSample = 40 } = {}) {
 /** The fitted curve, ordered by gap, for the model to interpolate over. */
 export async function loadUtrCurve() {
   const r = await query(
-    `select bracket, gap_low, gap_high, sample_size, win_rate, fitted_cents
-     from ${t('utr_curve')} order by gap_low`);
+    `select bracket, gap_low, gap_high, sample_size, win_rate, fitted_cents,
+            mean_gap, raw_win_rate, shrunk_cents
+     from ${t('utr_curve')} order by coalesce(mean_gap, (gap_low + gap_high) / 2)`);
   return r.rows.map(row => ({
     bracket: row.bracket,
     low: Number(row.gap_low),
     high: Number(row.gap_high),
+    // anchored where matches actually sit, not the middle of the bracket
+    meanGap: row.mean_gap != null
+      ? Number(row.mean_gap)
+      : (Number(row.gap_low) + Number(row.gap_high)) / 2,
     sampleSize: row.sample_size,
     winRate: Number(row.win_rate),
+    rawWinRate: row.raw_win_rate != null ? Number(row.raw_win_rate) : null,
     fittedCents: row.fitted_cents,
   }));
 }

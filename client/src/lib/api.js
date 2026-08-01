@@ -67,6 +67,39 @@ const get = (p, q) => {
   return call('GET', p + qs);
 };
 
+/**
+ * Downloads a file and hands it to the browser's save dialog.
+ *
+ * fetch is used rather than a plain link because the endpoint needs the bearer
+ * token, and an <a href> cannot carry one. The object URL is revoked afterwards
+ * so a few hundred kilobytes per export do not accumulate in the tab.
+ */
+async function download(path, fallbackName) {
+  const token = getToken();
+  const res = await fetch(BASE + path, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.error === 'no_settled_matches_in_range'
+      ? 'No settled matches in that range yet.'
+      : detail.message ?? `Export failed (${res.status}).`);
+  }
+
+  const disposition = res.headers.get('Content-Disposition') ?? '';
+  const named = /filename="?([^";]+)"?/.exec(disposition);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = named?.[1] ?? fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  return blob.size;
+}
+
 export const api = {
   base: BASE,
   health: () => get('/api/health'),
@@ -100,6 +133,13 @@ export const api = {
   saveSettings: patch => call('PATCH', '/api/settings', patch),
 
   sync: () => call('POST', '/api/sync'),
+
+  /* ---- training dataset ---- */
+  datasetSummary: range => get(`/api/dataset/summary?range=${range}`),
+  datasetSchema: () => get('/api/dataset/schema'),
+  datasetExport: (range, format) =>
+    download(`/api/dataset/export?range=${range}&format=${format}`,
+      `courtedge-tennis-${range}.${format}`),
   tick: () => call('POST', '/api/tick'),
   reconcileTrades: () => call('POST', '/api/trades/reconcile'),
   closePosition: id => call('POST', `/api/trades/${id}/close`),

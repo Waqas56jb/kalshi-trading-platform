@@ -5,6 +5,7 @@ import { api, fmtNum } from '../../../lib/api';
 import { drawBars, drawDonut, drawSparkBars } from '../../../lib/charts';
 import { PageHead } from '../PageHead';
 import { ErrorBox } from '../Notices';
+import { DatasetExport } from './DatasetExport';
 
 export default function Analytics() {
   const { data, error } = usePoll(() => api.analytics(30), { intervalMs: 30000 });
@@ -63,6 +64,8 @@ export default function Analytics() {
       />
 
       {error && <ErrorBox error={error} />}
+
+      <DatasetExport />
 
       {/* ---- live model output ---- */}
       <div className="flex items-center gap-3 mb-4">

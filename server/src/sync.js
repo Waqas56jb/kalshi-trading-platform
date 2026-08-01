@@ -3,6 +3,7 @@ import { syncSchedule } from './schedule.js';
 import { snapshotPortfolio, autoSellAtFair } from './orders.js';
 import { importKalshiHistory } from './importer.js';
 import { backfillRatings } from './ratings.js';
+import { syncSettlements } from './settlements.js';
 import { query, tx } from './db.js';
 import {
   buildSignalsForEvent, classifySchedule, dayIn, dollarsToCents, looksInPlay,
@@ -506,6 +507,13 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        trades placed outside this desk. */
     await importKalshiHistory(kalshi).catch(() => null);
 
+    /* Record how finished matches resolved. This is the dataset's target
+       variable: without it a market that leaves the feed is only ever marked
+       closed, and 756 rows sat labelled with nothing at all. One page per series
+       is enough to catch the day's settlements on a 60-second tick. */
+    const settled = await syncSettlements(kalshi, { maxPages: 1 })
+      .catch(() => ({ updated: 0 }));
+
     /* Run the exit rules — take-profit, stop-loss and sell-at-fair.
        These used to be reached only from the reconcile cron, which has never run
        because its repository secrets were never set, so positions sailed past
@@ -527,9 +535,9 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     if (verbose) {
       console.log(`  events=${out.events} markets=${rows.length} ticks=${out.ticks} ` +
         `signals=${out.computed} actionable=${out.actionable} alerts+${out.created}/-${out.expired} ` +
-        `exits=${exits.closed ?? 0} ${latency}ms`);
+        `exits=${exits.closed ?? 0} settled+${settled.updated ?? 0} ${latency}ms`);
     }
-    return { ok: true, runId, latency, marketsSeen: rows.length, ...out, exits };
+    return { ok: true, runId, latency, marketsSeen: rows.length, ...out, exits, settled };
   } catch (e) {
     await query(
       `update ${t('sync_runs')} set status='error', finished_at=now(), error=$2, latency_ms=$3 where id=$1`,

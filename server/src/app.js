@@ -5,6 +5,10 @@ import { ping } from './db.js';
 import { clientFromEnv } from './kalshi.js';
 import { runSync, reapStaleRuns, maybeAutoSync } from './sync.js';
 import {
+  buildDataset, datasetSummary, COLUMNS, FEATURE_COLUMNS, TARGET_COLUMN, RANGE_NAMES,
+} from './dataset.js';
+import { toCsv, toXlsx } from './xlsx.js';
+import {
   autoSellAtFair, checkKalshiAuth, closePosition, executeAlert, getAuthState, livePositions,
   reconcileTrades, snapshotPortfolio,
 } from './orders.js';
@@ -386,6 +390,54 @@ export function createApp() {
 
   api.get('/pnl', requireAuth, h(async (req, res) => {
     res.json({ pnl: await repo.pnlSeries(Math.min(Number(req.query.days) || 30, 90)) });
+  }));
+
+  /* ---------------------------------------------------------------- dataset */
+
+  api.get('/dataset/summary', requireAuth, h(async (req, res) => {
+    const range = String(req.query.range ?? 'week');
+    if (!RANGE_NAMES.includes(range)) return res.status(400).json({ error: 'bad_range' });
+    res.json({ summary: await datasetSummary({ range }), ranges: RANGE_NAMES });
+  }));
+
+  /**
+   * Downloads the training set.
+   *
+   * Sent as an attachment with an explicit filename so a browser saves it rather
+   * than rendering a few hundred kilobytes of CSV into the tab.
+   */
+  api.get('/dataset/export', requireAuth, h(async (req, res) => {
+    const range = String(req.query.range ?? 'week');
+    const format = String(req.query.format ?? 'csv').toLowerCase();
+    if (!RANGE_NAMES.includes(range)) return res.status(400).json({ error: 'bad_range' });
+    if (!['csv', 'xlsx'].includes(format)) return res.status(400).json({ error: 'bad_format' });
+
+    const { columns, rows } = await buildDataset({ range });
+    if (!rows.length) return res.status(404).json({ error: 'no_settled_matches_in_range' });
+
+    const stamp = rows[0].match_date ?? 'export';
+    const name = `courtedge-tennis-${range}-${stamp}.${format}`;
+    const body = format === 'xlsx' ? toXlsx(columns, rows, 'dataset') : toCsv(columns, rows);
+
+    res.setHeader('Content-Type', format === 'xlsx'
+      ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      : 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.setHeader('Content-Length', body.length);
+    // the browser must be able to read the filename back out of a fetch() response
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.send(body);
+  }));
+
+  /** The column contract, so whoever trains knows which fields are safe to use. */
+  api.get('/dataset/schema', requireAuth, h(async (_req, res) => {
+    res.json({
+      target: TARGET_COLUMN,
+      features: FEATURE_COLUMNS,
+      leakage: COLUMNS.filter(c => c.startsWith('final_')),
+      identifiers: ['match_date', 'ticker', 'event_ticker', 'player_name', 'opponent_name', 'close_time'],
+      note: 'final_* columns are the settled quote and leak the outcome. Train on the rest.',
+    });
   }));
 
   /* --------------------------------------------------------------- settings */

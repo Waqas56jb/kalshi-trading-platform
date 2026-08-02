@@ -146,6 +146,7 @@ export const api = {
   calibration: () => get('/api/calibration'),
   recalibrate: () => call('POST', '/api/calibration/recompute'),
   simulateFormulas: () => get('/api/model/simulate'),
+  gateComparison: () => get('/api/model/gate-comparison'),
 
   /* ---- training dataset ---- */
   datasetSummary: range => get(`/api/dataset/summary?range=${range}`),

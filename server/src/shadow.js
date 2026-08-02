@@ -582,22 +582,96 @@ async function recordDecisions(decisions, cfg) {
  * A YES contract pays $1 if the player won and nothing if not, so P&L is the
  * payout less what the fill and fees actually cost.
  */
+/* The rejections the cross-market gate is solely responsible for. Settled
+   outcomes are recorded for these too, or "would the formula alone have won"
+   could never be answered. */
+const CROSS_MARKET_CONSTRAINTS = [
+  'cross-market data', 'cross-market edge', 'supporting books', 'consensus dispersion',
+];
+
 export async function settleShadowTrades() {
   const r = await query(
     `update ${t('shadow_trades')} st set
        result = case when m.result = 'yes' then 'won' else 'lost' end,
        -- Kalshi rounds the fee up once for the whole order, so the ledger must
        -- charge ceil(rate x contracts) rather than rate x contracts.
-       pnl_usd = round(
+       -- Real P&L only for real (approved) positions; a gate-rejected row gets
+       -- its outcome recorded but no money booked against it.
+       pnl_usd = case when st.approved then round(
          case when m.result = 'yes' then st.contracts * 1.0 else 0 end
          - st.stake_usd
-         - ceil(coalesce(st.contracts * st.fee_rate, 0) * 100) / 100.0, 2),
+         - ceil(coalesce(st.contracts * st.fee_rate, 0) * 100) / 100.0, 2) end,
        settled_at = coalesce(m.settled_at, now())
      from ${t('markets')} m
      where m.ticker = st.ticker
-       and st.approved and st.result is null
-       and m.result in ('yes','no')`);
+       and (st.approved or st.limiting_constraint = any($1))
+       and st.result is null
+       and m.result in ('yes','no')`,
+    [CROSS_MARKET_CONSTRAINTS]);
   return { settled: r.rowCount ?? 0 };
+}
+
+/* When the odds feed went live and book data started being recorded. Rows
+   before this are from an era with no book information and would poison the
+   comparison. */
+const ODDS_FEED_LIVE_SINCE = '2026-08-02T13:00:00Z';
+
+/**
+ * The comparison the client asked for on 2 Aug 2026: bets confirmed against
+ * the odds API versus bets the formula would take regardless of it.
+ *
+ * Both cohorts are scored at a flat stake with Kalshi's fee, like the formula
+ * lab, so the difference is attributable to the gate and nothing else. It can
+ * only build forward from the day odds recording began — bookmakers do not
+ * hand out their past prices retroactively.
+ */
+export async function gateComparison({ stakeUsd = 100 } = {}) {
+  const { rows } = await query(
+    `select approved, limiting_constraint, book_consensus, best_ask_cents, result
+     from ${t('shadow_trades')}
+     where result is not null
+       and best_ask_cents between 1 and 99
+       and (approved or limiting_constraint = any($1))
+       and created_at >= $2`,
+    [CROSS_MARKET_CONSTRAINTS, ODDS_FEED_LIVE_SINCE]);
+
+  const mk = () => ({ bets: 0, wins: 0, stakedUsd: 0, pnlUsd: 0 });
+  const cohorts = { confirmed: mk(), formulaAlone: mk() };
+
+  for (const r of rows) {
+    const ask = Number(r.best_ask_cents);
+    const contracts = Math.max(1, Math.floor((stakeUsd * 100) / ask));
+    const feeCents = Math.ceil(0.07 * (ask / 100) * (1 - ask / 100) * 100);
+    const costCents = contracts * (ask + feeCents);
+    const pnlCents = (r.result === 'won' ? contracts * 100 : 0) - costCents;
+
+    const into = agg => {
+      agg.bets += 1;
+      agg.wins += r.result === 'won' ? 1 : 0;
+      agg.stakedUsd += costCents / 100;
+      agg.pnlUsd += pnlCents / 100;
+    };
+
+    // the formula wanted every one of these; the gate only let some through
+    into(cohorts.formulaAlone);
+    if (r.approved && r.book_consensus != null) into(cohorts.confirmed);
+  }
+
+  const finish = a => ({
+    bets: a.bets,
+    wins: a.wins,
+    winRatePct: a.bets ? +((a.wins / a.bets) * 100).toFixed(1) : null,
+    stakedUsd: +a.stakedUsd.toFixed(2),
+    pnlUsd: +a.pnlUsd.toFixed(2),
+    roiPct: a.stakedUsd > 0 ? +((a.pnlUsd / a.stakedUsd) * 100).toFixed(1) : null,
+  });
+
+  return {
+    since: ODDS_FEED_LIVE_SINCE,
+    stakeUsd,
+    confirmed: finish(cohorts.confirmed),
+    formulaAlone: finish(cohorts.formulaAlone),
+  };
 }
 
 /** Headline shadow performance, and the per-bracket breakdown the client asked for. */
@@ -607,7 +681,8 @@ export async function shadowSummary() {
         count(*) filter (where approved)::int placed,
         count(*) filter (where not approved)::int held_back,
         count(*) filter (where approved and result is not null)::int settled,
-        count(*) filter (where result = 'won')::int won,
+        -- gate-rejected rows also carry results now; only real positions count here
+        count(*) filter (where approved and result = 'won')::int won,
         coalesce(sum(stake_usd) filter (where approved), 0)::numeric staked,
         coalesce(sum(pnl_usd), 0)::numeric pnl,
         coalesce(sum(stake_usd) filter (where approved and result is null), 0)::numeric at_risk
@@ -615,7 +690,7 @@ export async function shadowSummary() {
     query(`select utr_bracket,
         count(*) filter (where approved)::int placed,
         count(*) filter (where approved and result is not null)::int settled,
-        count(*) filter (where result = 'won')::int won,
+        count(*) filter (where approved and result = 'won')::int won,
         coalesce(sum(stake_usd) filter (where approved), 0)::numeric staked,
         coalesce(sum(pnl_usd), 0)::numeric pnl
       from ${t('shadow_trades')} where utr_bracket is not null

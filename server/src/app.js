@@ -9,7 +9,7 @@ import {
   COLUMNS, FEATURE_COLUMNS, TARGET_COLUMN, RANGE_NAMES, BREAKDOWN_COLUMNS,
 } from './dataset.js';
 import { toCsv, toXlsx } from './xlsx.js';
-import { runShadowCycle, shadowSummary, loadRiskConfig } from './shadow.js';
+import { runShadowCycle, shadowSummary, loadRiskConfig, gateComparison } from './shadow.js';
 import { recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope } from './calibration.js';
 import { simulateFormulas } from './simulator.js';
 import { oddsFeedConfigured } from './oddsfeed.js';
@@ -529,6 +529,13 @@ export function createApp() {
       refitUtrCurve({ minSample: 40 }),
     ]);
     res.json({ calibration, curve });
+  }));
+
+  /* Bets confirmed by the odds API versus bets the formula would take
+     regardless — the comparison the client asked for. Builds forward from the
+     day odds recording began. */
+  api.get('/model/gate-comparison', requireAuth, h(async (_req, res) => {
+    res.json(await gateComparison());
   }));
 
   /* Replays settled matches under three fair-value formulas and reports each

@@ -19,6 +19,7 @@ export function ModelPanel() {
 
   return (
     <>
+      <GateComparison />
       <FormulaLab />
 
       <Panel title="Fitted rating curve">
@@ -108,6 +109,71 @@ export function ModelPanel() {
         </div>
       </Panel>
     </>
+  );
+}
+
+/**
+ * The client's requested comparison (2 Aug 2026): bets confirmed against the
+ * odds API versus bets the formula would take regardless. Both cohorts score
+ * at the same flat stake with fees, so the difference is the gate's doing and
+ * nothing else. Builds forward from the day odds recording began — books do
+ * not hand out their past prices retroactively.
+ */
+function GateComparison() {
+  const { data, error } = usePoll(() => api.gateComparison(), { intervalMs: 120000 });
+
+  const pnl = v => (
+    <span className={v > 0 ? 'text-up' : v < 0 ? 'text-down' : ''}>
+      {v > 0 ? '+' : ''}{v?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+    </span>
+  );
+
+  const rows = data ? [
+    ['Confirmed by the books', data.confirmed],
+    ['Formula alone (gate ignored)', data.formulaAlone],
+  ] : [];
+  const thin = data && data.formulaAlone.bets < 20;
+
+  return (
+    <Panel title="Book confirmation — is the gate earning its keep?">
+      <div className="text-muted text-[12.5px] mb-4">
+        Two cohorts, same flat ${data?.stakeUsd ?? 100} stake, fees included: entries the
+        sportsbooks confirmed versus everything the formula wanted regardless of the books.
+        Recording started {data ? new Date(data.since).toLocaleDateString() : 'with the odds feed'},
+        so this builds forward as matches settle — it cannot be backfilled.
+      </div>
+      {error && <div className="text-danger text-[12.5px]">Could not load the comparison: {error.message}</div>}
+      <div className="overflow-x-auto">
+        <table className="w-full text-[13px] min-w-[560px]">
+          <thead className="text-muted text-[11.5px] uppercase tracking-wide">
+            <tr>
+              <Th>Cohort</Th><Th right>Settled bets</Th><Th right>Win rate</Th>
+              <Th right>P&L ($)</Th><Th right>ROI</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([name, c]) => (
+              <tr key={name} className="border-t border-line">
+                <Td>{name}</Td>
+                <Td right>{fmtNum(c.bets)}</Td>
+                <Td right>{c.winRatePct != null ? `${c.winRatePct}%` : '—'}</Td>
+                <Td right className="font-display font-bold">{pnl(c.pnlUsd)}</Td>
+                <Td right>{c.roiPct != null ? `${c.roiPct}%` : '—'}</Td>
+              </tr>
+            ))}
+            {!rows.length && !error && (
+              <tr><Td colSpan={5}><span className="text-muted">Loading…</span></Td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {thin && (
+        <div className="text-muted2 text-[11.5px] font-mono mt-3">
+          Too few settled matches with recorded odds to judge yet — expect a meaningful read
+          after a week or two of settlements.
+        </div>
+      )}
+    </Panel>
   );
 }
 

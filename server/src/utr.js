@@ -8,6 +8,60 @@
  */
 
 const UTR_SEARCH = 'https://api.utrsports.net/v2/search/players';
+const UTR_LOGIN = 'https://app.utrsports.net/api/v1/auth/login';
+
+/*
+ * Authenticated lookups. UTR hides many ratings from anonymous requests —
+ * profiles that read "Rated" still return 0.0 without a login (Daniel Blazka:
+ * 0.0 anonymous, 10.93 with the client's Power account). Credentials live in
+ * env vars; the JWT they buy lasts about a month and is cached per instance.
+ */
+const utrCreds = () => ({
+  email: process.env.UTR_EMAIL || '',
+  password: process.env.UTR_PASSWORD || '',
+});
+
+let cachedJwt = null;   // { token, expiresAt (ms) }
+
+function jwtExpiryMs(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
+    return payload.exp ? payload.exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function utrLogin() {
+  const { email, password } = utrCreds();
+  if (!email || !password) return null;
+
+  const res = await fetch(UTR_LOGIN, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    console.warn(`UTR login failed: ${res.status}`);
+    return null;
+  }
+  const token = res.headers.get('jwt-token');
+  if (!token) return null;
+
+  // refresh a day before the token actually dies
+  cachedJwt = { token, expiresAt: jwtExpiryMs(token) - 24 * 3600 * 1000 };
+  return cachedJwt.token;
+}
+
+async function utrToken() {
+  if (cachedJwt && Date.now() < cachedJwt.expiresAt) return cachedJwt.token;
+  try {
+    return await utrLogin();
+  } catch (e) {
+    console.warn(`UTR login error: ${e.message}`);
+    return null;
+  }
+}
 
 /** Kalshi series -> expected UTR gender, used to reject cross-gender matches. */
 const SERIES_GENDER = {
@@ -60,13 +114,24 @@ export function nameScore(kalshiName, utrName) {
 
 async function searchUtr(name, { signal, top = 8 } = {}) {
   const url = `${UTR_SEARCH}?query=${encodeURIComponent(name)}&top=${top}`;
-  const res = await fetch(url, {
-    signal,
-    headers: {
-      Accept: 'application/json',
-      'User-Agent': 'Mozilla/5.0 (compatible; CourtEdge/1.0)',
-    },
-  });
+  const headers = {
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (compatible; CourtEdge/1.0)',
+  };
+  const token = await utrToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let res = await fetch(url, { signal, headers });
+
+  // A stale token gets one fresh login and one retry, then we give up loudly.
+  if (res.status === 401 && token) {
+    cachedJwt = null;
+    const fresh = await utrToken();
+    if (fresh) headers.Authorization = `Bearer ${fresh}`;
+    else delete headers.Authorization;
+    res = await fetch(url, { signal, headers });
+  }
+
   if (!res.ok) {
     const e = new Error(`UTR search ${res.status} for "${name}"`);
     e.status = res.status;

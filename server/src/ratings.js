@@ -29,7 +29,7 @@ export async function backfillRatings({
              )
          and ($3 or p.lookup_attempted_at is null or p.lookup_failed = false
               or p.lookup_attempted_at < now() - interval '3 days')
-         and (p.lookup_attempted_at is null
+         and ($3 or p.lookup_attempted_at is null
               or p.lookup_attempted_at < now() - interval '12 hours')
        order by p.competitor_id, m.updated_at desc
      ) q

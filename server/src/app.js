@@ -656,11 +656,14 @@ export function createApp() {
     res.json(await runSync(kalshi, { verbose: true }));
   }));
 
-  /** Imports UTR ratings for newly discovered competitors. Cron-driven. */
+  /** Imports UTR ratings for newly discovered competitors. Cron-driven.
+      ?retry=1 re-attempts players that previously failed or came back
+      unrated — useful after credentials change what UTR will reveal. */
   api.all('/ratings/backfill', h(async (req, res) => {
     if (!requireCronOrAdmin(req, res)) return;
     const limit = Math.min(Number(req.query.limit) || 40, 120);
-    const stats = await backfillRatings({ limit, delayMs: 220 });
+    const retryFailed = req.query.retry === '1';
+    const stats = await backfillRatings({ limit, delayMs: 220, retryFailed });
     res.json({ ...stats, coverage: await ratingsCoverage() });
   }));
 

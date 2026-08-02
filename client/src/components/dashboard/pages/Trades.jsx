@@ -137,9 +137,9 @@ export default function Trades({ user }) {
                           className="btn btn-danger btn-sm"
                           onClick={() => setConfirmClose(t)}
                           disabled={closing === t.id}
-                          title="Sell this position at the current bid"
+                          title="Optional early exit — sell at the current bid. Finished matches settle on their own (WON/LOST)."
                         >
-                          {closing === t.id ? 'Closing…' : 'Close'}
+                          {closing === t.id ? 'Selling…' : 'Sell early'}
                         </button>
                       )}
                       {t.exit_reason === 'auto_fair_value' && (
@@ -163,8 +163,8 @@ export default function Trades({ user }) {
 
       <ConfirmDialog
         open={Boolean(confirmClose)}
-        title="Close this position?"
-        message="This sells the whole position at the current bid, immediately. It cannot be undone."
+        title="Sell this position early?"
+        message="Optional early exit at the current bid. Finished matches do not need this — they book WON/LOST automatically once Kalshi resolves."
         rows={confirmClose ? [
           ['Player', confirmClose.player_name ?? confirmClose.ticker],
           ['Size', `${confirmClose.size_contracts ?? '—'} contracts`],

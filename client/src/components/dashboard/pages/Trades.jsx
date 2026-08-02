@@ -113,12 +113,9 @@ export default function Trades({ user }) {
                       <div className="font-semibold text-[13.5px]">{t.player_name ?? t.ticker}</div>
                       {t.matchup && <div className="text-[11.5px] text-muted2 font-mono mt-0.5">{t.matchup}</div>}
                       {t.sizing_note && /faulty_era|alert_path/i.test(t.sizing_note) && (
-                        <Tag
-                          className="bg-amber/15 text-amber mt-1"
-                          title={t.sizing_note}
-                        >
-                          FAULTY ERA · charted as $20
-                        </Tag>
+                        <span title={t.sizing_note} className="inline-block mt-1">
+                          <Tag className="bg-amber/15 text-amber">FAULTY ERA · charted as $20</Tag>
+                        </span>
                       )}
                     </td>
                     <td><Tag className="bg-up/12 text-up">{t.side.toUpperCase()}</Tag></td>

@@ -7,14 +7,16 @@ import { clearSession, getToken } from './auth';
 /**
  * Where the backend lives.
  *
- * VITE_API_URL is baked in at build time. The frontend and backend are deployed
- * as two separate Vercel projects, so this must be set on the frontend project
- * or requests fall back to this origin — where no /api exists — and 404.
+ * In production the API is served from this origin: the frontend's vercel.json
+ * rewrites /api/* to the backend project. Same origin means no CORS at all —
+ * a deploy can never break the dashboard with "is this origin allowed?" — and
+ * the httpOnly session cookie is first-party, which every browser (including
+ * Safari on the client's phone) accepts. In dev the two halves run as separate
+ * localhost ports, so the base comes from VITE_API_URL or the default.
  */
-const BASE = (import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:8787' : ''))
-  .replace(/\/$/, '');
-
-export const API_BASE_CONFIGURED = Boolean(import.meta.env.VITE_API_URL);
+const BASE = (import.meta.env.DEV
+  ? (import.meta.env.VITE_API_URL ?? 'http://localhost:8787')
+  : '').replace(/\/$/, '');
 
 class ApiError extends Error {
   constructor(message, status, body) {
@@ -41,10 +43,8 @@ async function call(method, path, body) {
     });
   } catch (e) {
     throw new ApiError(
-      API_BASE_CONFIGURED
-        ? `Cannot reach the API at ${BASE}. Is the backend running and is this origin allowed by CORS?`
-        : 'VITE_API_URL is not set, so there is no backend to call. Set it on this '
-          + 'deployment to your backend URL and redeploy.',
+      `Cannot reach the API${BASE ? ` at ${BASE}` : ''}. `
+        + 'The backend may be mid-deploy — this usually clears on its own within a minute.',
       0, null);
   }
 

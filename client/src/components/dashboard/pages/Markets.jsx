@@ -95,12 +95,10 @@ export default function Markets({ search, onTrade }) {
 
       <div className="mb-5 rounded-card border border-line2 bg-panel p-4 text-[12.5px] text-muted">
         <b className="text-text">Kalshi does not publish match start times</b> — its timestamp is an
-        expiry estimate that read 18:00 on a match which actually began at 13:27. Rather than show a
-        clock time it cannot support, the desk reports the match day (from the ticker, reliable) and
-        whether play has begun, read from the order book: a market in play trades thousands of
-        contracts an hour, one yet to start trades almost none. Hover a row for its 3h volume.
-        Exact clock times need a schedule feed — Sofascore and the ITF site both block server
-        requests, so that means a data provider with an API.
+        expiry estimate that read 18:00 on a match which actually began at 13:27. Match day comes
+        from the ticker; whether play has begun is read from the order book (hover a row for its 3h
+        volume). Exact clock times now come from the same Tennis API that confirms sportsbook odds —
+        a different endpoint on that subscription (`fixtures` by date), so no second vendor is needed.
       </div>
 
       <div className="bg-panel border border-line rounded-card overflow-hidden mb-5.5">

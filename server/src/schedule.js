@@ -1,18 +1,19 @@
 import { t } from './config.js';
 import { query } from './db.js';
 import { normaliseName, nameScore } from './utr.js';
+import { fixturesForDate, oddsFeedConfigured } from './oddsfeed.js';
 
 /**
  * Real match start times.
  *
  * Kalshi publishes none — its `occurrence_datetime` is an expiry estimate that
  * read 18:00 on a match which began at 13:27 — so start times have to come from
- * a schedule source. Sofascore is the one the trader uses.
+ * a schedule source.
  *
- * Sofascore has no public API and rejects requests it does not recognise as a
- * browser (403). Whether it answers a given host is an empirical question, so
- * `probe()` reports the truth rather than assuming, and the sync degrades to
- * order-book inference when it cannot be reached.
+ * Primary source is the Tennis API the desk already pays for (RapidAPI):
+ *   GET /tennis/v2/{atp|wta}/fixtures/{YYYY-MM-DD}
+ * Each row carries a real `date` clock time (ISO), ITF included. Sofascore is
+ * kept as a fallback; it has no public API and often 403s from the server.
  */
 
 const BROWSER_HEADERS = {
@@ -88,8 +89,19 @@ export async function fetchSchedule(date = todayUtc()) {
  * clear the bar — one strong surname match is not enough to pin a fixture.
  */
 export async function syncSchedule({ date = todayUtc(), minScore = 0.5 } = {}) {
-  const feed = await fetchSchedule(date);
-  if (!feed.ok) return { ok: false, error: feed.error, matched: 0, source: 'sofascore' };
+  /* The Tennis API the desk already subscribes to carries exact start times on
+     its date-scoped fixtures — and unlike Sofascore it welcomes server
+     requests. It goes first; Sofascore stays as the fallback. */
+  let feed = null;
+  if (oddsFeedConfigured()) {
+    const events = await fixturesForDate(date).catch(() => []);
+    if (events.length) feed = { ok: true, host: 'tennis-api', source: 'tennis-api', events };
+  }
+  if (!feed) {
+    const sofa = await fetchSchedule(date);
+    feed = { ...sofa, source: 'sofascore' };
+  }
+  if (!feed.ok) return { ok: false, error: feed.error, matched: 0, source: feed.source };
 
   const markets = await query(
     `select m.ticker, m.event_ticker, m.player_name, e.matchup
@@ -121,6 +133,8 @@ export async function syncSchedule({ date = todayUtc(), minScore = 0.5 } = {}) {
     });
   }
 
+  const source = feed.source || 'tennis-api';
+
   if (rows.length) {
     const col = f => rows.map(f);
     await query(
@@ -129,24 +143,26 @@ export async function syncSchedule({ date = todayUtc(), minScore = 0.5 } = {}) {
        select *, now() from unnest($1::text[], $2::text[], $3::timestamptz[], $4::text[],
                                    $5::text[], $6::text[], $7::text[], $8::numeric[])
        on conflict (ticker) do update set
-         starts_at = excluded.starts_at, match_status = excluded.match_status,
+         starts_at = excluded.starts_at, source = excluded.source,
+         match_status = excluded.match_status,
          confidence = excluded.confidence, fetched_at = now()`,
       [col(r => r.ticker), col(r => r.event_ticker), col(r => r.starts_at),
-        rows.map(() => 'sofascore'), col(r => r.home), col(r => r.away),
+        rows.map(() => source), col(r => r.home), col(r => r.away),
         col(r => r.status), col(r => r.score)],
     );
 
     // promote to the event, where the pre-match gate reads it
     await query(
       `update ${t('events')} e set scheduled_at = s.starts_at,
-         schedule_source = 'sofascore', schedule_confidence = 'exact'
+         schedule_source = s.source, schedule_confidence = 'exact'
        from ${t('match_schedule')} s
-       where s.event_ticker = e.event_ticker and s.source = 'sofascore'`,
+       where s.event_ticker = e.event_ticker and s.source = $1`,
+      [source],
     );
   }
 
   return {
-    ok: true, source: 'sofascore', host: feed.host,
+    ok: true, source, host: feed.host,
     fixtures: feed.events.length, markets: markets.rowCount, matched: rows.length,
   };
 }

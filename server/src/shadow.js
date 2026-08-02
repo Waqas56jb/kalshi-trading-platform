@@ -580,7 +580,7 @@ export async function settleShadowTrades() {
 
 /** Headline shadow performance, and the per-bracket breakdown the client asked for. */
 export async function shadowSummary() {
-  const [overall, brackets, reasons] = await Promise.all([
+  const [overall, brackets, reasons, priceBands] = await Promise.all([
     query(`select
         count(*) filter (where approved)::int placed,
         count(*) filter (where not approved)::int held_back,
@@ -601,6 +601,23 @@ export async function shadowSummary() {
     query(`select rejection_reason, limiting_constraint, count(*)::int n
       from ${t('shadow_trades')} where not approved
       group by 1, 2 order by n desc limit 12`),
+    /* The tilt audit: where the engine's entries actually sit on the price
+       ladder. The standing worry is that the model leans on underdogs, and the
+       only honest answer is the entry mix and each band's own P&L. */
+    query(`select case
+          when best_ask_cents < 35 then 'under 35c (longshot)'
+          when best_ask_cents < 50 then '35-50c (underdog)'
+          when best_ask_cents < 65 then '50-65c (slight favourite)'
+          when best_ask_cents < 80 then '65-80c (favourite)'
+          else '80c+ (heavy favourite)' end as band,
+        min(best_ask_cents)::int ord,
+        count(*)::int placed,
+        count(*) filter (where result is not null)::int settled,
+        count(*) filter (where result = 'won')::int won,
+        coalesce(sum(stake_usd), 0)::numeric staked,
+        coalesce(sum(pnl_usd), 0)::numeric pnl
+      from ${t('shadow_trades')} where approved and best_ask_cents is not null
+      group by 1 order by 2`),
   ]);
 
   const o = overall.rows[0];
@@ -627,6 +644,26 @@ export async function shadowSummary() {
       roi: Number(b.staked) > 0 ? +((Number(b.pnl) / Number(b.staked)) * 100).toFixed(1) : null,
     })),
     heldBackReasons: reasons.rows,
+    priceBands: priceBands.rows.map(b => ({
+      band: b.band,
+      placed: b.placed,
+      settled: b.settled,
+      won: b.won,
+      winRate: b.settled ? +(b.won / b.settled).toFixed(3) : null,
+      staked: +Number(b.staked).toFixed(2),
+      pnl: +Number(b.pnl).toFixed(2),
+      roi: Number(b.staked) > 0 ? +((Number(b.pnl) / Number(b.staked)) * 100).toFixed(1) : null,
+    })),
+    /* Share of stake below 50c — the single number that answers "does it tilt
+       towards underdogs". */
+    underdogStakeShare: (() => {
+      const total = priceBands.rows.reduce((s, b) => s + Number(b.staked), 0);
+      if (!total) return null;
+      const dogs = priceBands.rows
+        .filter(b => b.ord < 50)
+        .reduce((s, b) => s + Number(b.staked), 0);
+      return +((dogs / total) * 100).toFixed(1);
+    })(),
   };
 }
 

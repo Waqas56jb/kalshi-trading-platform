@@ -28,7 +28,7 @@ export default function Shadow() {
     <div className="animate-page-in">
       <PageHead
         title="Shadow desk"
-        sub="The risk engine on live markets and real prices, placing nothing"
+        sub="The risk engine on live markets and real prices — approved entries are placed automatically"
       />
 
       {error && <ErrorBox error={error} />}
@@ -86,6 +86,45 @@ export default function Shadow() {
               ))}
               {!s?.brackets?.length && (
                 <tr><Td colSpan={7}><span className="text-muted">No bracket data yet.</span></Td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
+      <Panel title="Favourite / underdog tilt audit">
+        <div className="text-muted text-[12.5px] mb-3">
+          Where the engine's entries sit on the price ladder, each band judged on its own P&L.
+          {s?.underdogStakeShare != null && (
+            <> Right now <strong className="text-ink">{s.underdogStakeShare}%</strong> of stake
+            is below 50¢ — the engine's price floor and per-band exposure caps are what keep
+            this from drifting toward longshots.</>
+          )}
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[13px] min-w-[520px]">
+            <thead className="text-muted text-[11.5px] uppercase tracking-wide">
+              <tr>
+                <Th>Entry price</Th><Th right>Placed</Th><Th right>Settled</Th>
+                <Th right>Win rate</Th><Th right>Staked</Th><Th right>P&L</Th><Th right>ROI</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {(s?.priceBands ?? []).map(b => (
+                <tr key={b.band} className="border-t border-line">
+                  <Td>{b.band}</Td>
+                  <Td right>{fmtNum(b.placed)}</Td>
+                  <Td right>{fmtNum(b.settled)}</Td>
+                  <Td right>{b.winRate != null ? `${Math.round(b.winRate * 100)}%` : '—'}</Td>
+                  <Td right>{fmtUsd(b.staked)}</Td>
+                  <Td right className={b.pnl > 0 ? 'text-ace' : b.pnl < 0 ? 'text-danger' : ''}>
+                    {fmtUsd(b.pnl)}
+                  </Td>
+                  <Td right>{b.roi != null ? `${b.roi}%` : '—'}</Td>
+                </tr>
+              ))}
+              {!s?.priceBands?.length && (
+                <tr><Td colSpan={7}><span className="text-muted">No entries to audit yet.</span></Td></tr>
               )}
             </tbody>
           </table>

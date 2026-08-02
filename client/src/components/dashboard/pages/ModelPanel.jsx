@@ -15,6 +15,7 @@ export function ModelPanel() {
   const { data } = usePoll(() => api.calibration(), { intervalMs: 60000 });
   const buckets = data?.buckets ?? [];
   const curve = data?.curve ?? [];
+  const slope = data?.slope;
 
   return (
     <>
@@ -26,6 +27,12 @@ export function ModelPanel() {
           actually observed inside it, thin brackets are pulled toward the original curve,
           and the whole thing is forced to rise — a larger rating gap can never price lower
           than a smaller one.
+          {slope?.sample != null && (
+            <> The model is currently learning from{' '}
+            <strong className="text-ink">{fmtNum(slope.sample)} settled matches</strong> — every
+            settled ITF market where both players carry a rating counts, whether or not the desk
+            traded it, and every new settlement joins the sample automatically.</>
+          )}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-[13px] min-w-[480px]">

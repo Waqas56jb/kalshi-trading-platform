@@ -47,12 +47,15 @@ export default function Alerts({ state, side, onSide, onDismiss, onDismissAll, o
   const alerts = state.data?.alerts ?? [];
   const tradingLive = health?.kalshi?.trading === 'ok';
   const threshold = health?.settings?.min_ev_threshold;
+  const autoPlace = (settings ?? health?.settings)?.shadow_auto_place !== false;
 
   return (
     <div className="animate-page-in">
       <PageHead
         title="Mispricing alerts"
-        sub="Pre-match only · the engine takes approved positions itself — this queue is for visibility and manual override"
+        sub={autoPlace
+          ? 'Nothing here needs your approval — the engine places its own trades'
+          : 'Pre-match only · matches today or later whose book shows no sign of play'}
         action={
           <div className="flex gap-2.5 items-center flex-wrap max-sm:w-full">
             {!alertsOn && (
@@ -72,6 +75,16 @@ export default function Alerts({ state, side, onSide, onDismiss, onDismissAll, o
 
       {state.error && <ErrorBox error={state.error} onRetry={state.refresh} />}
       {!tradingLive && <AuthNotice health={health} />}
+
+      {autoPlace && (
+        <div className="mb-5 rounded-card border border-line2 bg-panel p-4 text-[13px] text-muted">
+          <strong className="text-ink">Trading is automated.</strong> Every mispricing that
+          passes the risk engine's checks is placed by the engine itself, and its alert clears
+          on its own. What you see below are the mispricings the risk engine chose{' '}
+          <em>not</em> to take — kept visible so nothing is filtered silently. You never have to
+          act on them; the buttons exist only to override the engine by hand.
+        </div>
+      )}
 
       <div className="grid grid-cols-[repeat(auto-fill,minmax(330px,1fr))] gap-4 max-sm:grid-cols-1">
         {alerts.map(a => {
@@ -122,7 +135,7 @@ export default function Alerts({ state, side, onSide, onDismiss, onDismissAll, o
                   Dismiss
                 </button>
                 <button className="btn btn-up btn-sm flex-1 justify-center" onClick={() => onTrade(a)}>
-                  Approve trade
+                  {autoPlace ? 'Override & place' : 'Approve trade'}
                 </button>
               </div>
 
@@ -140,8 +153,11 @@ export default function Alerts({ state, side, onSide, onDismiss, onDismissAll, o
       {!alerts.length && (state.loading
         ? <Loading label="Loading alert queue…" />
         : <Empty icon="🎾" title="No open alerts">
-            The engine is scanning every open ITF market. New edges appear here the moment the book
-            drifts past your {threshold ? `+${threshold}%` : ''} EV threshold.
+            {autoPlace
+              ? 'The engine is scanning every open ITF market and places its own trades. '
+                + 'Mispricings it declines appear here for review — right now there are none.'
+              : `The engine is scanning every open ITF market. New edges appear here the moment the book
+                 drifts past your ${threshold ? `+${threshold}%` : ''} EV threshold.`}
           </Empty>)}
     </div>
   );

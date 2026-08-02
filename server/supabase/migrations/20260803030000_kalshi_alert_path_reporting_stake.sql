@@ -13,7 +13,8 @@ comment on column public.kalshi_trades.sizing_note is
 -- from that era. Does not archive them; history stays visible with the tag.
 update public.kalshi_trades
 set reporting_stake_usd = 20,
-    sizing_note = 'alert_path_flat_stake'
+    sizing_note = 'faulty_era: alert-path flat $250 stake + collapsed UTR curve; '
+                  'not risk-engine sized; charted as $20 for desk P&L'
 where archived_at is null
   and coalesce(stake_usd, 0) > 40
   and (

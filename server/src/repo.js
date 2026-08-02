@@ -218,19 +218,23 @@ export async function tagOversizedAlertPathFills() {
        add column if not exists reporting_stake_usd numeric(12,2),
        add column if not exists sizing_note text`);
 
+  const NOTE = 'faulty_era: alert-path flat $250 stake + collapsed UTR curve; '
+    + 'not risk-engine sized; charted as $20 for desk P&L';
+
   const r = await query(
     `update ${t('trades')}
      set reporting_stake_usd = 20,
-         sizing_note = coalesce(sizing_note, 'alert_path_flat_stake')
+         sizing_note = $1
      where archived_at is null
-       and reporting_stake_usd is null
        and coalesce(stake_usd, 0) > 40
        and (
          player_name ilike '%slavikova%'
          or player_name ilike '%milanese%'
          or coalesce(stake_usd, 0) >= 100
        )
-     returning id, player_name, stake_usd`);
+       and (sizing_note is null or sizing_note = 'alert_path_flat_stake')
+     returning id, player_name, stake_usd`,
+    [NOTE]);
   return { tagged: r.rowCount ?? 0, rows: r.rows };
 }
 

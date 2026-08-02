@@ -10,6 +10,12 @@ export default function ConfirmModal({ alert, busy, health, paper, onClose, onCo
     ['Tournament', alert.tournament ?? '—'],
     ['Side', 'YES · buy'],
     ['Market ask', alert.market_cents != null ? `${alert.market_cents}¢` : '—'],
+    /* The other side of the match, from its own order book — never derived as
+       1 minus this side, because each contract has its own spread and depth. */
+    [`${alert.opponent_name ?? 'Opponent'} bid/ask`,
+      alert.opponent_bid_cents != null || alert.opponent_ask_cents != null
+        ? `${alert.opponent_bid_cents ?? '—'}¢ / ${alert.opponent_ask_cents ?? '—'}¢`
+        : 'no market'],
     ['Fair value (UTR model)', alert.fair_cents != null ? `${alert.fair_cents}¢` : '—', 'text-ace'],
     ['Edge', alert.edge_cents != null ? `+${alert.edge_cents}¢` : '—', 'text-up'],
     ['Expected value', fmtPct(alert.ev_pct), 'text-up'],

@@ -109,7 +109,8 @@ export default function Markets({ search, onTrade }) {
             <thead>
               <tr>
                 <th>Player / match</th><th>Day / state</th><th>UTR</th><th>Δ</th><th>Fair</th>
-                <th>Bid</th><th>Ask</th><th>Edge</th><th>EV</th><th>Vol</th><th>Status</th>
+                <th>Bid</th><th>Ask</th><th title="The opponent's own market — its price is not 1 minus this side's">Opp bid/ask</th>
+                <th>Edge</th><th>EV</th><th>Vol</th><th>Status</th>
               </tr>
             </thead>
             <tbody>
@@ -135,6 +136,21 @@ export default function Markets({ search, onTrade }) {
                   <td className="font-mono font-semibold">{m.fair_cents != null ? `${m.fair_cents}¢` : '—'}</td>
                   <td className="font-mono text-muted">{m.yes_bid_cents != null ? `${m.yes_bid_cents}¢` : '—'}</td>
                   <td className="font-mono font-bold">{m.yes_ask_cents != null ? `${m.yes_ask_cents}¢` : '—'}</td>
+                  {/* The other half of the book, quoted from the opponent's own
+                      market. One side's price is never presented as 1 minus the
+                      other's: each contract has its own spread and depth. */}
+                  <td
+                    className="font-mono whitespace-nowrap"
+                    title={m.opponent_player_name ? `${m.opponent_player_name}'s market` : undefined}
+                  >
+                    {m.opponent_bid_cents != null || m.opponent_ask_cents != null
+                      ? <>
+                          <span className="text-muted">{m.opponent_bid_cents != null ? `${m.opponent_bid_cents}¢` : '—'}</span>
+                          <span className="text-muted2"> / </span>
+                          <span className="font-bold">{m.opponent_ask_cents != null ? `${m.opponent_ask_cents}¢` : '—'}</span>
+                        </>
+                      : <span className="text-muted2">no market</span>}
+                  </td>
                   <td className={`font-mono font-bold ${
                     m.edge_cents == null ? 'text-muted2' : m.edge_cents > 0 ? 'text-ace' : 'text-muted2'
                   }`}>

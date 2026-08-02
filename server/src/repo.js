@@ -32,6 +32,14 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
             e.scheduled_at, e.schedule_confidence, e.schedule_source,
             s.fair_cents, s.ev_pct, s.utr_gap, s.player_utr, s.opponent_utr,
             s.opponent_name, s.is_actionable, s.side_type,
+            -- the other half of the book. The client was explicit: both sides of
+            -- a match must be visible, each with its own quote — one side's price
+            -- is never 1 minus the other's, because each contract carries its own
+            -- spread and depth.
+            opp.player_name as opponent_player_name,
+            opp.yes_bid_cents as opponent_bid_cents,
+            opp.yes_ask_cents as opponent_ask_cents,
+            opp.ticker as opponent_ticker,
             -- absolute edge in cents. Percentage EV explodes on cheap contracts
             -- (a 1c error on a 3c ask reads as +33%), so the UI ranks on this too.
             (s.fair_cents - s.market_cents) as edge_cents,
@@ -39,6 +47,8 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
      from ${t('markets')} m
      join ${t('events')} e using (event_ticker)
      left join ${t('signals')} s on s.ticker = m.ticker
+     left join ${t('markets')} opp
+       on opp.event_ticker = m.event_ticker and opp.ticker <> m.ticker
      where m.status in ('active','open','initialized')
        and ($1 = '' or m.player_name ilike '%'||$1||'%'
                     or e.matchup ilike '%'||$1||'%'
@@ -133,10 +143,15 @@ export async function listAlerts({ status = 'open', side = 'all', limit = 50 } =
             m.occurrence_datetime as market_starts_at,
             (a.fair_cents - a.market_cents) as edge_cents,
             (m.yes_ask_cents - m.yes_bid_cents) as spread_cents,
-            s.player_utr, s.opponent_utr, s.opponent_name
+            s.player_utr, s.opponent_utr, s.opponent_name,
+            -- both sides of the match at decision time, each from its own book
+            opp.yes_bid_cents as opponent_bid_cents,
+            opp.yes_ask_cents as opponent_ask_cents
      from ${t('alerts')} a
      left join ${t('signals')} s on s.ticker = a.ticker
      left join ${t('markets')} m on m.ticker = a.ticker
+     left join ${t('markets')} opp
+       on opp.event_ticker = a.event_ticker and opp.ticker <> a.ticker
      left join ${t('events')} e on e.event_ticker = a.event_ticker
      where ($1 = 'any' or a.status = $1)
        -- belt and braces: even a row the update above missed cannot surface

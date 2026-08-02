@@ -41,16 +41,22 @@ export function createApp() {
   const app = express();
   const kalshi = clientFromEnv();
 
+  const originAllowed = origin => {
+    if (config.corsOrigin.includes(origin)) return true;
+    let host;
+    try { host = new URL(origin).hostname; } catch { return false; }
+    if (config.allowAnyLocalhost && /^(localhost|127\.0\.0\.1)$/.test(host)) return true;
+    return /\.vercel\.app$/.test(host);
+  };
+
+  /* Credentials on, because the session travels in an httpOnly cookie. Safe
+     with this CORS setup only because the origin callback echoes a specific
+     allowlisted origin, never `*`. */
   app.use(cors({
-    credentials: false,
+    credentials: true,
     origin(origin, cb) {
       if (!origin) return cb(null, true);                     // curl / server-to-server
-      if (config.corsOrigin.includes(origin)) return cb(null, true);
-      let host;
-      try { host = new URL(origin).hostname; } catch { return cb(null, false); }
-      if (config.allowAnyLocalhost && /^(localhost|127\.0\.0\.1)$/.test(host)) return cb(null, true);
-      if (/\.vercel\.app$/.test(host)) return cb(null, true);
-      cb(null, false);                                        // reject without throwing
+      cb(null, originAllowed(origin));                        // reject without throwing
     },
   }));
   app.use(express.json({ limit: '256kb' }));
@@ -73,14 +79,49 @@ export function createApp() {
     return h.startsWith('Bearer ') ? h.slice(7).trim() : null;
   };
 
+  /* The session lives in an httpOnly cookie so no script on the page can read
+     it — the localStorage token the audit flagged is gone. The bearer header is
+     still accepted: it is what keeps Safari working, where a cookie set by a
+     different site (the API and the dashboard are separate Vercel projects)
+     is refused outright. */
+  const SESSION_COOKIE = 'courtedge_token';
+  const TOKEN_TTL_SECONDS = 60 * 60 * 12;                     // matches signToken
+
+  const cookieToken = req => {
+    const raw = req.headers.cookie;
+    if (!raw) return null;
+    for (const part of raw.split(';')) {
+      const i = part.indexOf('=');
+      if (i > 0 && part.slice(0, i).trim() === SESSION_COOKIE) {
+        try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return null; }
+      }
+    }
+    return null;
+  };
+
+  /* Cross-site in production (separate Vercel projects) requires
+     SameSite=None + Secure; local dev over http gets Lax, which is enough when
+     both halves run on localhost. */
+  const cookieAttrs = maxAge => `Path=/; HttpOnly; Max-Age=${maxAge}; `
+    + (process.env.VERCEL ? 'SameSite=None; Secure' : 'SameSite=Lax');
+  const setSessionCookie = (res, token) =>
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(token)}; ${cookieAttrs(TOKEN_TTL_SECONDS)}`);
+  const clearSessionCookie = res =>
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; ${cookieAttrs(0)}`);
+
   /** Attaches req.user when a valid session token is present. Never rejects. */
   const readSession = (req, _res, next) => {
     req.user = null;
-    const tok = bearer(req);
+    req.authViaCookie = false;
+    const fromHeader = bearer(req);
+    const tok = fromHeader ?? cookieToken(req);
     if (tok && authConfigured()) {
       try {
         const c = verifyToken(tok);
-        if (c) req.user = { id: Number(c.sub), email: c.email, role: c.role };
+        if (c) {
+          req.user = { id: Number(c.sub), email: c.email, role: c.role };
+          req.authViaCookie = !fromHeader;
+        }
       } catch { /* unconfigured or malformed — treated as anonymous */ }
     }
     next();
@@ -96,6 +137,17 @@ export function createApp() {
     }
     if (!req.user) {
       return res.status(401).json({ error: 'unauthorized', message: 'Sign in to continue.' });
+    }
+    /* CSRF gate. A SameSite=None cookie rides along on cross-site form posts,
+       which a bearer header never did, so a write authenticated only by the
+       cookie must come from an allowlisted origin. Browsers always attach
+       Origin to non-GET requests; a request without one is not a browser form
+       post and passes. */
+    if (req.authViaCookie && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      const origin = req.get('origin');
+      if (origin && !originAllowed(origin)) {
+        return res.status(403).json({ error: 'bad_origin', message: 'Request origin is not allowed.' });
+      }
     }
     next();
   };
@@ -184,7 +236,19 @@ export function createApp() {
       // deliberately identical whether the account is unknown or the password is wrong
       return res.status(401).json({ error: 'invalid_credentials', message: 'Email or password is incorrect.' });
     }
+    /* The cookie is the session where the browser permits it; the token in the
+       body is the fallback the client keeps in memory for browsers that refuse
+       a cross-site cookie. Both travel over TLS. */
+    setSessionCookie(res, result.token);
     res.json(result);
+  }));
+
+  api.post('/auth/logout', h(async (req, res) => {
+    if (req.user) {
+      await logAuthEvent({ userId: req.user.id, email: req.user.email, event: 'logout', req });
+    }
+    clearSessionCookie(res);
+    res.json({ ok: true });
   }));
 
   api.get('/auth/me', requireAuth, h(async (req, res) => {

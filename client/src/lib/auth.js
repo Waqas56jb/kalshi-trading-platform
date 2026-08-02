@@ -1,16 +1,36 @@
 /**
  * Session storage for the desk.
  *
- * The token is a short-lived HS256 JWT issued by the backend. It lives in
- * localStorage because the frontend and API are on different origins, which
- * makes a cookie session awkward; the trade-off is that it is readable by any
- * script on the page, so keep third-party scripts off this app.
+ * The real session is an httpOnly cookie set by the backend at login, which no
+ * script on this page can read. The short-lived HS256 JWT the login response
+ * also returns is kept in memory, with sessionStorage as the reload fallback
+ * for browsers (Safari) that refuse a cookie set by a different site — the
+ * frontend and API are separate Vercel projects. Nothing secret touches
+ * localStorage any more; only the display-user cache lives there, so a
+ * returning visitor does not get a login-screen flash while the cookie is
+ * revalidated.
  */
 const TOKEN_KEY = 'courtedge.token';
 const USER_KEY = 'courtedge.user';
 
+let memoryToken = null;
+
+/* One-time migration: sessions issued before the cookie change kept the token
+   in localStorage. Move it out so it stops being readable, without logging
+   anyone out on deploy. */
+try {
+  const legacy = localStorage.getItem(TOKEN_KEY);
+  if (legacy) {
+    sessionStorage.setItem(TOKEN_KEY, legacy);
+    localStorage.removeItem(TOKEN_KEY);
+  }
+} catch { /* storage unavailable — cookie or in-memory session only */ }
+
 const listeners = new Set();
-const notify = () => listeners.forEach(fn => fn());
+/* 'updated' on login/refresh, 'cleared' on logout or a dead session. The event
+   matters because a cookie-only session has no local token, so "is there a
+   token?" no longer answers "are we signed in?". */
+const notify = event => listeners.forEach(fn => fn(event));
 
 export const onSessionChange = fn => {
   listeners.add(fn);
@@ -18,7 +38,8 @@ export const onSessionChange = fn => {
 };
 
 export const getToken = () => {
-  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+  if (memoryToken) return memoryToken;
+  try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; }
 };
 
 export const getCachedUser = () => {
@@ -29,19 +50,21 @@ export const getCachedUser = () => {
 };
 
 export function setSession(token, user) {
+  if (token) {
+    memoryToken = token;
+    try { sessionStorage.setItem(TOKEN_KEY, token); } catch { /* in-memory only */ }
+  }
   try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
     if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
   } catch { /* private browsing — session lasts for this page only */ }
-  notify();
+  notify('updated');
 }
 
 export function clearSession() {
-  try {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-  } catch { /* ignore */ }
-  notify();
+  memoryToken = null;
+  try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ }
+  try { localStorage.removeItem(USER_KEY); } catch { /* ignore */ }
+  notify('cleared');
 }
 
 /** Initials for the avatar, from the name if present, else the email. */

@@ -11,20 +11,29 @@ export function usePoll(fetcher, { intervalMs = 0, deps = [], enabled = true } =
   const fnRef = useRef(fetcher);
   fnRef.current = fetcher;
   const alive = useRef(true);
+  /* Ticket counter for in-flight requests. Responses do not arrive in the
+     order they were sent — a slow poll can land after the fast one that
+     followed it — and without this the older payload would overwrite the
+     newer on screen: prices going backwards. Only the latest request may
+     write state. */
+  const seq = useRef(0);
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
+    const ticket = ++seq.current;
     if (!quiet) setLoading(true);
     try {
       const d = await fnRef.current();
       if (!alive.current) return d;
-      setData(d);
-      setError(null);
+      if (ticket === seq.current) {
+        setData(d);
+        setError(null);
+      }
       return d;
     } catch (e) {
-      if (alive.current) setError(e);
+      if (alive.current && ticket === seq.current) setError(e);
       return null;
     } finally {
-      if (alive.current) setLoading(false);
+      if (alive.current && ticket === seq.current) setLoading(false);
     }
   }, []);
 

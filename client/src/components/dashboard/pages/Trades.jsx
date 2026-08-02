@@ -5,6 +5,7 @@ import { usePoll } from '../../../hooks/useApi';
 import { api, fmtPct, fmtTime, fmtUsd } from '../../../lib/api';
 import { PageHead } from '../PageHead';
 import { Empty, ErrorBox, Loading } from '../Notices';
+import ConfirmDialog from '../ConfirmDialog';
 
 const FILTERS = [['all', 'All'], ['open', 'Open'], ['won', 'Won'], ['lost', 'Lost']];
 
@@ -46,7 +47,11 @@ export default function Trades({ user }) {
     }
   };
 
-  /** Sells the position at the current bid — a click, as the trader asked. */
+  /* Closing sells real contracts at the current bid, so the click goes
+     through a confirmation first — the barrier the client asked for between
+     a tap and money moving. */
+  const [confirmClose, setConfirmClose] = useState(null);
+
   const close = async t => {
     setClosing(t.id);
     try {
@@ -57,6 +62,7 @@ export default function Trades({ user }) {
       toast('Could not close', e.message, 'tdown');
     } finally {
       setClosing(null);
+      setConfirmClose(null);
     }
   };
 
@@ -129,7 +135,7 @@ export default function Trades({ user }) {
                       {isOpen(t) && (
                         <button
                           className="btn btn-danger btn-sm"
-                          onClick={() => close(t)}
+                          onClick={() => setConfirmClose(t)}
                           disabled={closing === t.id}
                           title="Sell this position at the current bid"
                         >
@@ -154,6 +160,23 @@ export default function Trades({ user }) {
               is recorded here.
             </Empty>)}
       </div>
+
+      <ConfirmDialog
+        open={Boolean(confirmClose)}
+        title="Close this position?"
+        message="This sells the whole position at the current bid, immediately. It cannot be undone."
+        rows={confirmClose ? [
+          ['Player', confirmClose.player_name ?? confirmClose.ticker],
+          ['Size', `${confirmClose.size_contracts ?? '—'} contracts`],
+          ['Entry', confirmClose.entry_cents != null ? `${confirmClose.entry_cents}¢` : '—'],
+          ['Stake', fmtUsd(confirmClose.stake_usd)],
+          ['Mode', confirmClose.mode === 'paper' ? 'Paper' : 'Live', confirmClose.mode === 'paper' ? 'text-amber' : 'text-ace'],
+        ] : []}
+        confirmLabel="Sell at bid"
+        busy={Boolean(closing)}
+        onClose={() => setConfirmClose(null)}
+        onConfirm={() => close(confirmClose)}
+      />
     </div>
   );
 }

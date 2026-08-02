@@ -10,13 +10,15 @@ function Shell() {
   const toast = useToast();
   const [view, setView] = useState('landing');
   const [user, setUser] = useState(getCachedUser);
-  const [restoring, setRestoring] = useState(Boolean(getToken()));
+  const [restoring, setRestoring] = useState(Boolean(getToken() || getCachedUser()));
 
-  /* Revalidate a stored token on load. The cached user is shown immediately so
-     a refresh does not flash the login screen, but the server has the last word:
-     a revoked or expired token drops us back to signing in. */
+  /* Revalidate the session on load. The cached user is shown immediately so a
+     refresh does not flash the login screen, but the server has the last word:
+     a revoked or expired session drops us back to signing in. A cached user
+     with no local token is still worth trying — the session may live in the
+     httpOnly cookie, which this page cannot see, only use. */
   useEffect(() => {
-    if (!getToken()) { setRestoring(false); return; }
+    if (!getToken() && !getCachedUser()) { setRestoring(false); return; }
     let alive = true;
     api.me()
       .then(r => {
@@ -30,9 +32,11 @@ function Shell() {
     return () => { alive = false; };
   }, []);
 
-  /* api.js clears the session on any 401, so react to that centrally. */
-  useEffect(() => onSessionChange(() => {
-    if (!getToken()) {
+  /* api.js clears the session on any 401, so react to that centrally. The
+     event matters: a cookie-only session has no local token, so the absence of
+     one no longer means signed out. */
+  useEffect(() => onSessionChange(event => {
+    if (event === 'cleared') {
       setUser(prev => {
         if (prev) {
           setView('login');
@@ -54,6 +58,7 @@ function Shell() {
   }, [toast]);
 
   const logout = useCallback(() => {
+    api.logout().catch(() => {});   // clears the httpOnly cookie server-side
     clearSession();
     setUser(null);
     setView('landing');

@@ -35,6 +35,8 @@ async function call(method, path, body) {
     res = await fetch(BASE + path, {
       method,
       headers,
+      // the session cookie is httpOnly, so the browser has to be told to send it
+      credentials: 'include',
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (e) {
@@ -78,6 +80,7 @@ async function download(path, fallbackName) {
   const token = getToken();
   const res = await fetch(BASE + path, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: 'include',
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
@@ -106,6 +109,7 @@ export const api = {
 
   /* ---- auth ---- */
   login: (email, password) => call('POST', '/api/auth/login', { email, password }),
+  logout: () => call('POST', '/api/auth/logout'),
   me: () => get('/api/auth/me'),
   updateMe: patch => call('PATCH', '/api/auth/me', patch),
 
@@ -164,11 +168,20 @@ export { ApiError };
 
 export const centsToPrice = c => (c == null ? null : `${c}¢`);
 
-export const fmtUsd = (n, { sign = false } = {}) => {
+/**
+ * Money always shows cents. Rounding to whole dollars made a $12.60 position
+ * read "$13" and a -$0.40 day read "$0", which on a desk sized in cents is not
+ * a rounding nicety — it is wrong numbers. Whole-dollar display is opt-in for
+ * the few large aggregates where cents are noise.
+ */
+export const fmtUsd = (n, { sign = false, cents = true } = {}) => {
   if (n == null) return '—';
   const v = Number(n);
   const s = sign && v > 0 ? '+' : v < 0 ? '-' : '';
-  return `${s}$${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const digits = cents ? 2 : 0;
+  return `${s}$${Math.abs(v).toLocaleString(undefined, {
+    minimumFractionDigits: digits, maximumFractionDigits: digits,
+  })}`;
 };
 
 export const fmtPct = (n, { sign = true } = {}) => {

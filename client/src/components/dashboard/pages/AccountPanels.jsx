@@ -4,6 +4,7 @@ import { usePoll } from '../../../hooks/useApi';
 import { api, fmtTime } from '../../../lib/api';
 import { setSession } from '../../../lib/auth';
 import { useToast } from '../../Toasts';
+import ConfirmDialog from '../ConfirmDialog';
 
 const Label = ({ children, htmlFor }) => (
   <label htmlFor={htmlFor} className="block text-xs font-semibold tracking-[.05em] uppercase text-muted mb-2">
@@ -117,6 +118,8 @@ export function TeamPanel({ user }) {
   const [busy, setBusy] = useState(false);
   const [resetFor, setResetFor] = useState(null);
   const [resetPw, setResetPw] = useState('');
+  const [deleteFor, setDeleteFor] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const users = state.data?.users ?? [];
 
@@ -202,7 +205,7 @@ export function TeamPanel({ user }) {
                           </button>
                           <button
                             className="btn btn-danger btn-sm"
-                            onClick={() => act(() => api.deleteUser(u.id), 'Account removed', u.email)}
+                            onClick={() => setDeleteFor(u)}
                           >
                             Delete
                           </button>
@@ -221,6 +224,29 @@ export function TeamPanel({ user }) {
           </table>
         </div>
       </Panel>
+
+      <ConfirmDialog
+        open={Boolean(deleteFor)}
+        title="Delete this account?"
+        message="This removes the account and its access immediately. It cannot be undone."
+        rows={deleteFor ? [
+          ['Email', deleteFor.email],
+          ['Name', deleteFor.name ?? '—'],
+          ['Role', deleteFor.role.toUpperCase()],
+        ] : []}
+        confirmLabel="Delete account"
+        busy={deleting}
+        onClose={() => setDeleteFor(null)}
+        onConfirm={async () => {
+          setDeleting(true);
+          try {
+            await act(() => api.deleteUser(deleteFor.id), 'Account removed', deleteFor.email);
+          } finally {
+            setDeleting(false);
+            setDeleteFor(null);
+          }
+        }}
+      />
 
       {resetFor && (
         <Panel title={`Reset password — ${resetFor.email}`}>

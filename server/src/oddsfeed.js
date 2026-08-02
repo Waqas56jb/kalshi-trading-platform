@@ -82,6 +82,45 @@ async function fixtureIndex() {
   return fixtureLoad;
 }
 
+/* --------------------------------------------------------------- schedule */
+
+/*
+ * The date-scoped fixtures route doubles as a schedule feed: unlike the plain
+ * listing (where `date` is mostly null), /fixtures/{YYYY-MM-DD} carries a real
+ * clock time on every row — verified 103/103 for 3 Aug 2026, ITF included.
+ * The desk already pays for this API, so it replaces the paid schedule
+ * provider we thought we needed.
+ */
+const scheduleCache = new Map(); // date -> { at, events }
+
+export async function fixturesForDate(date) {
+  if (!oddsFeedConfigured() || !date) return [];
+  const hit = scheduleCache.get(date);
+  if (hit && Date.now() - hit.at < FIXTURE_TTL_MS) return hit.events;
+
+  const events = [];
+  for (const tour of ['atp', 'wta']) {
+    for (let page = 1; page <= 4; page++) {
+      let j;
+      try {
+        j = await fetchJson(
+          `/tennis/v2/${tour}/fixtures/${date}?filter=PlayerGroup:singles&pageSize=100&pageNo=${page}`);
+      } catch {
+        break; // partial day is still useful; the cache TTL retries
+      }
+      for (const f of j?.data ?? []) {
+        const home = f?.player1?.name;
+        const away = f?.player2?.name;
+        if (!home || !away || !f?.date) continue;
+        events.push({ home, away, startsAt: f.date, status: null, tournament: '' });
+      }
+      if (!j?.hasNextPage) break;
+    }
+  }
+  scheduleCache.set(date, { at: Date.now(), events });
+  return events;
+}
+
 /* -------------------------------------------------------------------- odds */
 
 const ODDS_TTL_MS = 5 * 60 * 1000;

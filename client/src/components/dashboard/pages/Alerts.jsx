@@ -130,6 +130,21 @@ export default function Alerts({ state, side, onSide, onDismiss, onDismissAll, o
                 <span className="text-right">{fmtNum(a.volume_available)} at ask</span>
               </div>
 
+              {autoPlace && (
+                <div className={`rounded-[10px] border px-3 py-2 mb-3.5 text-[11.5px] font-mono
+                                 ${a.engine_approved === true
+                                   ? 'border-up/30 bg-up/8 text-up'
+                                   : a.engine_reason
+                                     ? 'border-line2 bg-bg2 text-muted'
+                                     : 'border-line2 bg-bg2 text-muted2'}`}>
+                  {a.engine_approved === true
+                    ? 'Engine approved this — placing automatically.'
+                    : a.engine_reason
+                      ? <>Engine declined — {a.engine_reason}</>
+                      : 'Engine has not evaluated this market yet — next cycle will.'}
+                </div>
+              )}
+
               <div className="flex gap-2.5">
                 <button className="btn btn-danger btn-sm flex-1 justify-center" onClick={() => onDismiss(a.id)}>
                   Dismiss

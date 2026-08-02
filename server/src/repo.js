@@ -146,13 +146,26 @@ export async function listAlerts({ status = 'open', side = 'all', limit = 50 } =
             s.player_utr, s.opponent_utr, s.opponent_name,
             -- both sides of the match at decision time, each from its own book
             opp.yes_bid_cents as opponent_bid_cents,
-            opp.yes_ask_cents as opponent_ask_cents
+            opp.yes_ask_cents as opponent_ask_cents,
+            -- the risk engine's own verdict on this market, so an open alert
+            -- can say why the engine did not take it instead of looking like
+            -- a request for approval
+            eng.approved as engine_approved,
+            eng.rejection_reason as engine_reason,
+            eng.limiting_constraint as engine_constraint
      from ${t('alerts')} a
      left join ${t('signals')} s on s.ticker = a.ticker
      left join ${t('markets')} m on m.ticker = a.ticker
      left join ${t('markets')} opp
        on opp.event_ticker = a.event_ticker and opp.ticker <> a.ticker
      left join ${t('events')} e on e.event_ticker = a.event_ticker
+     left join lateral (
+       select st.approved, st.rejection_reason, st.limiting_constraint
+       from ${t('shadow_trades')} st
+       where st.ticker = a.ticker
+       order by st.match_date desc, st.id desc
+       limit 1
+     ) eng on true
      where ($1 = 'any' or a.status = $1)
        -- belt and braces: even a row the update above missed cannot surface
        and ($1 <> 'open' or a.starts_at is null or a.starts_at > now())

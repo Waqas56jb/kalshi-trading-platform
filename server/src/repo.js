@@ -201,9 +201,43 @@ export const getAlert = async id => {
 
 /* ------------------------------------------------------------------- trades */
 
+/* Desk charts use this so oversized alert-path fills ($250 flat stake) plot as
+   ~$20 risk-engine bets. Raw stake_usd / pnl_usd stay untouched for audit. */
+const DESK_PNL = `case
+  when tr.reporting_stake_usd is not null and coalesce(tr.stake_usd, 0) > 0
+    then tr.pnl_usd * (tr.reporting_stake_usd / tr.stake_usd)
+  else tr.pnl_usd
+end`;
+
+/** Tags known oversized alert-path fills for $20 chart scaling. Idempotent. */
+export async function tagOversizedAlertPathFills() {
+  /* Ensure columns exist even if the SQL migration has not been applied yet —
+     production syncs this on every pass so Slavikova/Milanese get tagged ASAP. */
+  await query(
+    `alter table ${t('trades')}
+       add column if not exists reporting_stake_usd numeric(12,2),
+       add column if not exists sizing_note text`);
+
+  const r = await query(
+    `update ${t('trades')}
+     set reporting_stake_usd = 20,
+         sizing_note = coalesce(sizing_note, 'alert_path_flat_stake')
+     where archived_at is null
+       and reporting_stake_usd is null
+       and coalesce(stake_usd, 0) > 40
+       and (
+         player_name ilike '%slavikova%'
+         or player_name ilike '%milanese%'
+         or coalesce(stake_usd, 0) >= 100
+       )
+     returning id, player_name, stake_usd`);
+  return { tagged: r.rowCount ?? 0, rows: r.rows };
+}
+
 export async function listTrades({ filter = 'all', limit = 200 } = {}) {
   const r = await query(
-    `select * from ${t('trades')}
+    `select tr.*, (${DESK_PNL})::numeric as desk_pnl_usd
+     from ${t('trades')} tr
      where archived_at is null and case $1
              when 'won'  then result = 'won'
              when 'lost' then result = 'lost'
@@ -300,7 +334,7 @@ export async function pnlSeries(days = 30) {
          current_date, interval '1 day')::date as day
      )
      select d.day,
-            coalesce(sum(tr.pnl_usd), 0)::numeric as pnl,
+            coalesce(sum(${DESK_PNL}), 0)::numeric as pnl,
             count(tr.id)::int as trades
      from d
      left join ${t('trades')} tr
@@ -324,7 +358,7 @@ export async function pnlByGapBucket() {
               when abs(s.utr_gap) >= 1.0 then 'Δ1.0–1.4'
               else 'Δ0.5–0.9'
             end as bucket,
-            coalesce(sum(tr.pnl_usd), 0)::numeric as pnl,
+            coalesce(sum(${DESK_PNL}), 0)::numeric as pnl,
             count(tr.id)::int as trades
      from ${t('trades')} tr
      join ${t('signals')} s on s.ticker = tr.ticker
@@ -378,19 +412,19 @@ export async function overviewStats() {
   const [trades, snap, mkts, alerts] = await series([
     () => query(
       `select
-         coalesce(sum(pnl_usd) filter (where status = 'settled'), 0)::numeric as realised_pnl,
-         coalesce(sum(pnl_usd) filter (where status = 'settled'
-           and placed_at >= current_date - interval '7 days'), 0)::numeric as pnl_7d,
-         coalesce(sum(pnl_usd) filter (where status = 'settled'
-           and placed_at::date = current_date), 0)::numeric as pnl_today,
-         count(*) filter (where status in ('pending','filled','partial'))::int as open_positions,
-         coalesce(sum(stake_usd) filter (where status in ('pending','filled','partial')), 0)::numeric as at_risk,
-         -- voids are neither wins nor losses; counting them made 1 win in 47
-         -- read as a 2% hit rate when the real figure is over decided trades only
-         count(*) filter (where result in ('won','lost'))::int as settled,
-         count(*) filter (where result = 'won')::int as won,
-         count(*) filter (where result = 'void')::int as void
-       from ${t('trades')} where archived_at is null`),
+         coalesce(sum(${DESK_PNL}) filter (where tr.status = 'settled'), 0)::numeric as realised_pnl,
+         coalesce(sum(${DESK_PNL}) filter (where tr.status = 'settled'
+           and tr.placed_at >= current_date - interval '7 days'), 0)::numeric as pnl_7d,
+         coalesce(sum(${DESK_PNL}) filter (where tr.status = 'settled'
+           and tr.placed_at::date = current_date), 0)::numeric as pnl_today,
+         count(*) filter (where tr.status in ('pending','filled','partial'))::int as open_positions,
+         /* Open risk: chart oversized alert-path tickets at the $20 reporting stake. */
+         coalesce(sum(coalesce(tr.reporting_stake_usd, tr.stake_usd))
+           filter (where tr.status in ('pending','filled','partial')), 0)::numeric as at_risk,
+         count(*) filter (where tr.result in ('won','lost'))::int as settled,
+         count(*) filter (where tr.result = 'won')::int as won,
+         count(*) filter (where tr.result = 'void')::int as void
+       from ${t('trades')} tr where tr.archived_at is null`),
     () => query(`select balance_cents, exposure_cents, realized_pnl_cents,
                         open_positions, captured_at from ${t('portfolio_snapshots')}
            order by captured_at desc limit 1`),

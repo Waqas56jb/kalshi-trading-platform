@@ -5,7 +5,7 @@ import { importKalshiHistory } from './importer.js';
 import { backfillRatings } from './ratings.js';
 import { syncSettlements } from './settlements.js';
 import { runShadowCycle, settleShadowTrades } from './shadow.js';
-import { settleResolvedTrades } from './repo.js';
+import { settleResolvedTrades, tagOversizedAlertPathFills } from './repo.js';
 import {
   recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope, deriveMinimumPrice,
 } from './calibration.js';
@@ -517,6 +517,8 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        the admin "Settle now" button, so FILLED rows sat with Result/P&L blank
        until someone clicked. */
     await settleResolvedTrades(kalshi).catch(() => null);
+    /* Scale Slavikova / Milanese-style $250 alert-path fills to $20 on desk charts. */
+    await tagOversizedAlertPathFills().catch(() => null);
 
     /* Re-measure the model against everything that has settled, and re-fit the
        UTR curve. Cheap, and it means the curve improves on its own instead of

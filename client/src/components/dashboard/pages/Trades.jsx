@@ -112,12 +112,20 @@ export default function Trades({ user }) {
                     <td>
                       <div className="font-semibold text-[13.5px]">{t.player_name ?? t.ticker}</div>
                       {t.matchup && <div className="text-[11.5px] text-muted2 font-mono mt-0.5">{t.matchup}</div>}
+                      {t.sizing_note === 'alert_path_flat_stake' && (
+                        <Tag className="bg-amber/15 text-amber mt-1">ALERT PATH · charted as $20</Tag>
+                      )}
                     </td>
                     <td><Tag className="bg-up/12 text-up">{t.side.toUpperCase()}</Tag></td>
                     <td className="font-mono font-semibold">{t.entry_cents != null ? `${t.entry_cents}¢` : '—'}</td>
                     <td className="font-mono font-semibold text-ace">{t.fair_cents != null ? `${t.fair_cents}¢` : '—'}</td>
                     <td className="font-mono">{t.size_contracts ?? '—'}</td>
-                    <td className="font-mono">{fmtUsd(t.stake_usd)}</td>
+                    <td className="font-mono">
+                      {fmtUsd(t.stake_usd)}
+                      {t.reporting_stake_usd != null && Number(t.reporting_stake_usd) !== Number(t.stake_usd) && (
+                        <div className="text-[10.5px] text-muted2">desk {fmtUsd(t.reporting_stake_usd)}</div>
+                      )}
+                    </td>
                     <td className="font-mono">{t.exit_cents != null ? `${t.exit_cents}¢` : '—'}</td>
                     <td><Tag className={cls}>{label}</Tag></td>
                     <td>
@@ -127,9 +135,12 @@ export default function Trades({ user }) {
                       {!t.result && <span className="text-muted2">—</span>}
                     </td>
                     <td className={`font-mono font-semibold ${
-                      Number(t.pnl_usd) > 0 ? 'text-up' : Number(t.pnl_usd) < 0 ? 'text-down' : ''
+                      Number(t.desk_pnl_usd ?? t.pnl_usd) > 0 ? 'text-up'
+                        : Number(t.desk_pnl_usd ?? t.pnl_usd) < 0 ? 'text-down' : ''
                     }`}>
-                      {t.status === 'settled' ? fmtUsd(t.pnl_usd, { sign: true }) : '—'}
+                      {t.status === 'settled'
+                        ? fmtUsd(t.desk_pnl_usd ?? t.pnl_usd, { sign: true })
+                        : '—'}
                     </td>
                     <td>
                       {isOpen(t) && (

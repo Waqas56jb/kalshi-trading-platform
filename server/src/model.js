@@ -85,6 +85,27 @@ export function parseMarketTitle(title = '', rules = '') {
  * Falls back to the original curve while a bracket still lacks the sample to be
  * worth trusting.
  */
+/**
+ * Fair value from the fitted logistic: P(win) = 1/(1 + e^(-k·gap)).
+ *
+ * This is the pricing curve. It replaced bracket-midpoint interpolation after
+ * the client caught the seams on the terminal: a 0.15 gap priced 56c against
+ * 59c for 0.35 — three cents for over twice the advantage — while 0.71 and
+ * 0.81 both flattened onto 76c past the last bracket anchor. A logistic has
+ * no seams and no flat tail: every increase in gap moves the price, in
+ * proportion, everywhere on the curve. The slope k is fitted to settled
+ * matches by maximum likelihood in calibration.js.
+ */
+export function fairFromLogistic(gap, k) {
+  if (gap === null || gap === undefined || !Number.isFinite(gap)) return null;
+  if (!Number.isFinite(k) || k <= 0) return null;
+
+  const p = 100 / (1 + Math.exp(-k * Math.abs(gap)));
+  // rounded once on the higher-rated side and mirrored, so a match sums to 100
+  const rounded = Math.max(1, Math.min(99, Math.round(p)));
+  return gap >= 0 ? rounded : 100 - rounded;
+}
+
 export function fairFromFittedCurve(gap, curve) {
   if (gap === null || gap === undefined || !Number.isFinite(gap)) return null;
   if (!curve?.length) return fairFromGap(gap);
@@ -162,7 +183,7 @@ export function midPrice(m) {
  * Builds signals for the two markets of one event.
  * `players` maps competitor_id -> { name, utr }.
  */
-export function buildSignalsForEvent(markets, players, curve = null) {
+export function buildSignalsForEvent(markets, players, curve = null, logisticK = null) {
   if (markets.length !== 2) return [];       // only head-to-head binaries are modelled
 
   return markets.map((m, i) => {
@@ -173,11 +194,11 @@ export function buildSignalsForEvent(markets, players, curve = null) {
     const oppUtr = you?.utr != null ? Number(you.utr) : null;
 
     const gap = myUtr != null && oppUtr != null ? +(myUtr - oppUtr).toFixed(2) : null;
-    /* Prefer the curve fitted to settled matches. The hand-written fallback
-       says 65c at a 0.5 gap where the measured rate is 78c, and moves in coarse
-       segments that gave a 0.1 gap and a 0.49 gap near-identical prices — the
-       client raised exactly that. */
-    const fair = curve?.length ? fairFromFittedCurve(gap, curve) : fairFromGap(gap);
+    /* Pricing preference, best evidence first: the smooth logistic fitted to
+       settled matches; the bracket-interpolated curve while no slope has been
+       fitted yet; the hand-written estimate when there is no fit at all. */
+    const fair = fairFromLogistic(gap, logisticK)
+      ?? (curve?.length ? fairFromFittedCurve(gap, curve) : fairFromGap(gap));
     const price = executablePrice(m);
     const ev = fair != null ? evPct(fair, price) : null;
 

@@ -6,7 +6,7 @@ import { backfillRatings } from './ratings.js';
 import { syncSettlements } from './settlements.js';
 import { runShadowCycle, settleShadowTrades } from './shadow.js';
 import {
-  recomputeCalibration, refitUtrCurve, loadUtrCurve, deriveMinimumPrice,
+  recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope, deriveMinimumPrice,
 } from './calibration.js';
 import { query, tx } from './db.js';
 import { assessQuote } from './quote.js';
@@ -211,10 +211,12 @@ async function bookActivity(client, tickers) {
 }
 
 async function computeSignals(client, rows, settings) {
-  /* The curve fitted to settled matches, when one exists. Loaded per sync rather
+  /* The fit from settled matches, when one exists. Loaded per sync rather
      than cached in module scope so a refit takes effect on the next cycle
-     instead of the next deploy. */
+     instead of the next deploy. The logistic slope is the pricing curve; the
+     brackets are the fallback until a slope has been fitted. */
   const curve = await loadUtrCurve().catch(() => []);
+  const slope = await loadUtrSlope().catch(() => null);
 
   const ids = [...new Set(rows.map(r => r.competitor_id).filter(Boolean))];
   const players = new Map();
@@ -231,7 +233,9 @@ async function computeSignals(client, rows, settings) {
   }
 
   const signals = [];
-  for (const ms of byEvent.values()) signals.push(...buildSignalsForEvent(ms, players, curve));
+  for (const ms of byEvent.values()) {
+    signals.push(...buildSignalsForEvent(ms, players, curve, slope?.k ?? null));
+  }
   const rated = signals.filter(s => s.fair_cents != null && s.market_cents != null);
   if (!rated.length) return { computed: 0, actionable: 0 };
 

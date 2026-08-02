@@ -10,7 +10,7 @@ import {
 } from './dataset.js';
 import { toCsv, toXlsx } from './xlsx.js';
 import { runShadowCycle, shadowSummary, loadRiskConfig } from './shadow.js';
-import { recomputeCalibration, refitUtrCurve, loadUtrCurve } from './calibration.js';
+import { recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope } from './calibration.js';
 import {
   autoSellAtFair, checkKalshiAuth, closePosition, executeAlert, getAuthState, livePositions,
   reconcileTrades, snapshotPortfolio,
@@ -510,13 +510,14 @@ export function createApp() {
   /* ------------------------------------------------------------ calibration */
 
   api.get('/calibration', requireAuth, h(async (_req, res) => {
-    const [buckets, curve] = await Promise.all([
+    const [buckets, curve, slope] = await Promise.all([
       query(`select bucket, sample_size, mean_predicted, actual_rate,
                     calibration_error, verified, computed_at
              from ${t('calibration')} order by bucket`),
       loadUtrCurve(),
+      loadUtrSlope().catch(() => null),
     ]);
-    res.json({ buckets: buckets.rows, curve });
+    res.json({ buckets: buckets.rows, curve, slope });
   }));
 
   api.post('/calibration/recompute', requireAuth, h(async (_req, res) => {

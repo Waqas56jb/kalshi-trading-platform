@@ -175,6 +175,53 @@ function enforceMonotonic(points) {
 }
 
 /**
+ * Fits the logistic slope by maximum likelihood on the match-level results.
+ *
+ * P(higher-rated wins | gap g) = 1 / (1 + e^(-k·g))
+ *
+ * One parameter, fitted on every settled match at once, so it cannot inherit
+ * bucket noise. This replaces bracket-midpoint interpolation as the pricing
+ * curve because of what the client saw on the terminal: a 0.15 gap at 56c
+ * against a 0.35 gap at 59c — three cents for more than twice the rating
+ * advantage — and then 0.71 and 0.81 both landing on 76c because everything
+ * past the last bracket anchor went flat. A logistic is monotone and smooth by
+ * construction: more gap is always more price, in proportion, at every point
+ * on the curve. The bracket fit below is kept as the verification view — the
+ * place to check the smooth curve against raw bucket win rates.
+ *
+ * Newton-Raphson on the log-likelihood; the derivatives are textbook:
+ * L'(k) = Σ g·(y − σ(kg)),  L''(k) = −Σ g²·σ(kg)·(1−σ(kg)).
+ */
+export function fitLogisticSlope(rows, { k0 = 1.2, priorWeight = 60 } = {}) {
+  const data = rows
+    .map(r => ({ g: Number(r.gap), y: r.higher_won ? 1 : 0 }))
+    .filter(d => Number.isFinite(d.g) && d.g > 0);
+  if (!data.length) return null;
+
+  let k = k0;
+  for (let iter = 0; iter < 50; iter += 1) {
+    let d1 = 0;
+    let d2 = 0;
+    for (const { g, y } of data) {
+      const p = 1 / (1 + Math.exp(-k * g));
+      d1 += g * (y - p);
+      d2 -= g * g * p * (1 - p);
+    }
+    if (d2 === 0) break;
+    const step = d1 / d2;
+    k -= step;
+    k = Math.min(8, Math.max(0.1, k));
+    if (Math.abs(step) < 1e-6) break;
+  }
+
+  /* Same shrinkage philosophy as the brackets: a thin sample stays near the
+     prior slope, a large one lands on its own evidence. */
+  const n = data.length;
+  const shrunk = (n * k + priorWeight * k0) / (n + priorWeight);
+  return { kRaw: +k.toFixed(4), k: +shrunk.toFixed(4), sample: n };
+}
+
+/**
  * Fits the curve from settled matches.
  *
  * Three things the first version got wrong, all of which the client saw in the
@@ -207,6 +254,22 @@ export async function refitUtrCurve({ minSample = 40, priorWeight = 60 } = {}) {
        and m.ticker < opp.ticker`);
 
   if (!rows.length) return { fitted: 0, sample: 0 };
+
+  /* The pricing curve: one smooth logistic slope, fitted to every settled
+     match. k0 is the slope the hand-written curve implies at a 0.5 gap
+     (ln(65/35)/0.5), so with no data the fit reproduces the documented
+     strategy and with data it converges on the measured one. */
+  const slope = fitLogisticSlope(rows, { k0: 1.24, priorWeight });
+  if (slope) {
+    await query(
+      `insert into ${t('derived_limits')} (name, value, unit, sample_size, evidence, computed_at)
+       values ('utr_logistic_k', $1, 'slope', $2, $3::jsonb, now())
+       on conflict (name) do update set
+         value = excluded.value, sample_size = excluded.sample_size,
+         evidence = excluded.evidence, computed_at = now()`,
+      [slope.k, slope.sample, JSON.stringify({ kRaw: slope.kRaw, kShrunk: slope.k, priorK: 1.24 })],
+    );
+  }
 
   const measured = [];
   for (const b of BRACKETS) {
@@ -275,7 +338,15 @@ export async function refitUtrCurve({ minSample = 40, priorWeight = 60 } = {}) {
     `delete from ${t('utr_curve')} where bracket <> all($1::text[])`,
     [fitted.map(f => f.bracket)]);
 
-  return { fitted: fitted.length, sample: rows.length, detail: fitted };
+  return { fitted: fitted.length, sample: rows.length, logisticK: slope?.k ?? null, detail: fitted };
+}
+
+/** The fitted logistic slope, or null while there is nothing fitted yet. */
+export async function loadUtrSlope() {
+  const r = await query(
+    `select value, sample_size from ${t('derived_limits')} where name = 'utr_logistic_k'`);
+  const row = r.rows[0];
+  return row ? { k: Number(row.value), sample: row.sample_size } : null;
 }
 
 /** The fitted curve, ordered by gap, for the model to interpolate over. */

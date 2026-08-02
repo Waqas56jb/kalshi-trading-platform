@@ -1,10 +1,9 @@
 import { Logo } from '../common';
-import { IconActivity, IconBell, IconChart, IconGear, IconGrid, IconLogout, IconPie } from '../Icons';
+import { IconActivity, IconChart, IconGear, IconGrid, IconLogout, IconPie } from '../Icons';
 
 const NAV = [
   { id: 'overview', label: 'Overview', Ic: IconGrid },
   { id: 'markets', label: 'Live markets', Ic: IconActivity },
-  { id: 'alerts', label: 'Alerts', Ic: IconBell, badge: true },
   { id: 'shadow', label: 'Shadow desk', Ic: IconChart },
   { id: 'model', label: 'Model', Ic: IconPie },
   { id: 'trades', label: 'Trade history', Ic: IconChart },
@@ -12,10 +11,10 @@ const NAV = [
 ];
 
 export default function Sidebar({
-  open, page, onPage, onClose, onHome, onLogout, alertCount, botOn, onToggleBot, health, user,
+  open, page, onPage, onClose, onHome, onLogout, botOn, onToggleBot, health, user,
 }) {
   const tracked = health?.sync?.markets_seen ?? null;
-  const status = !botOn ? 'PAUSED · ALERTS ONLY'
+  const status = !botOn ? 'PAUSED'
     : tracked != null ? `SCANNING · ${tracked} MARKETS`
     : 'STARTING UP…';
 
@@ -37,14 +36,9 @@ export default function Sidebar({
 
         <nav className="flex-1 py-4 px-3 overflow-y-auto">
           <SbLabel>Trading desk</SbLabel>
-          {NAV.map(({ id, label, Ic, badge }) => (
+          {NAV.map(({ id, label, Ic }) => (
             <SbItem key={id} active={page === id} onClick={() => onPage(id)}>
               <Ic />{label}
-              {badge && alertCount > 0 && (
-                <span className="ml-auto font-mono text-[11px] bg-down/15 text-down py-0.5 px-2 rounded-full font-bold">
-                  {alertCount}
-                </span>
-              )}
             </SbItem>
           ))}
           <SbLabel>System</SbLabel>

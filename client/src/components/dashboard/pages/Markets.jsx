@@ -59,7 +59,7 @@ function StartCell({ matchDate, playState, volumeGrowth }) {
   );
 }
 
-export default function Markets({ search, onTrade }) {
+export default function Markets({ search }) {
   const [filter, setFilter] = useState('upcoming');
   const [sort, setSort] = useState('edge');
   const { data, error, loading } = usePoll(

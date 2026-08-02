@@ -14,7 +14,7 @@ import { recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope } from 
 import { simulateFormulas } from './simulator.js';
 import { oddsFeedConfigured } from './oddsfeed.js';
 import {
-  autoSellAtFair, checkKalshiAuth, closePosition, executeAlert, getAuthState, livePositions,
+  autoSellAtFair, checkKalshiAuth, closePosition, getAuthState, livePositions,
   reconcileTrades, snapshotPortfolio,
 } from './orders.js';
 import { probe as probeSchedule, syncSchedule } from './schedule.js';
@@ -387,11 +387,14 @@ export function createApp() {
     res.json({ dismissed: await repo.dismissAllAlerts() });
   }));
 
-  api.post('/alerts/:id/execute', requireAuth, h(async (req, res) => {
-    const out = await executeAlert(kalshi, Number(req.params.id), {
-      sizeOverride: req.body?.contracts ? Number(req.body.contracts) : undefined,
+  /* Manual alert execution removed — the shadow desk is the only placement
+     path. Keeping the route as Gone so an old client cannot resurrect the
+     flat stake_per_trade bypass that printed $249 on Slavikova. */
+  api.post('/alerts/:id/execute', requireAuth, h(async (_req, res) => {
+    res.status(410).json({
+      error: 'alerts_removed',
+      message: 'Manual alert trading is disabled. The shadow desk places its own trades.',
     });
-    res.status(out.ok ? 200 : 502).json(out);
   }));
 
   /* ----------------------------------------------------------------- trades */

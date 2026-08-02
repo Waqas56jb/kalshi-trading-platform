@@ -4,17 +4,16 @@ import { usePoll } from '../../../hooks/useApi';
 import { useCanvas } from '../../../hooks/useUi';
 import { api, fmtCountdown, fmtMatchTime, fmtNum, fmtPct, fmtUsd } from '../../../lib/api';
 import { drawLineArea } from '../../../lib/charts';
-import { useToast } from '../../Toasts';
 import { PageHead } from '../PageHead';
 import { AuthNotice, ErrorBox, PaperNotice } from '../Notices';
 
-export default function Overview({ alerts, health, settings, onPage, onTrade, onRefresh, user }) {
-  const toast = useToast();
+export default function Overview({ health, settings, onPage }) {
   const [days, setDays] = useState(30);
   const { data, error, loading, refresh } = usePoll(() => api.overview(days), {
     intervalMs: 15000, deps: [days],
   });
   const hot = usePoll(() => api.markets({ filter: 'mispriced', limit: 5 }), { intervalMs: 15000 });
+  const shadow = usePoll(() => api.shadowSummary(), { intervalMs: 30000 });
 
   const s = data?.stats ?? null;
   const desk = s?.desk ?? null;
@@ -26,6 +25,8 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
   const autoPlace = settings?.shadow_auto_place !== false;
   const balanceAgeMins = s?.balance_at
     ? Math.round((Date.now() - new Date(s.balance_at).getTime()) / 60000) : null;
+  const mode = shadow.data?.mode ?? null;
+  const overall = shadow.data?.summary ?? null;
 
   const pnlRef = useCanvas(c => {
     drawLineArea(c, pnl.map(p => p.cumulative), '#34D399', {
@@ -42,8 +43,8 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
               : syncAge < 60 ? `${syncAge}s ago` : `${Math.round(syncAge / 60)}m ago`}`
           : 'Connecting to the desk…'}
         action={
-          <button className="btn btn-ace btn-sm" onClick={() => onPage('alerts')}>
-            {alerts.length ? `Review ${alerts.length} open alert${alerts.length === 1 ? '' : 's'}` : 'No open alerts'}
+          <button className="btn btn-ace btn-sm" onClick={() => onPage('shadow')}>
+            Shadow desk
           </button>
         }
       />
@@ -52,7 +53,6 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
       {paper && <PaperNotice kalshiOk={tradingLive} />}
       {!tradingLive && !paper && <AuthNotice health={health} />}
 
-      {/* live desk metrics — these work from the first sync, before any trade */}
       <div className="grid grid-cols-4 gap-4 mb-4 max-[1180px]:grid-cols-2 max-[420px]:grid-cols-1">
         <StatCard
           label="Markets priced"
@@ -75,17 +75,16 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
           deltaClass="text-muted"
         />
         <StatCard
-          label="Open alerts"
-          value={s ? fmtNum(s.open_alerts) : '—'}
-          valueClass={s?.open_alerts ? 'text-down' : ''}
-          delta={s?.open_alerts
-            ? (autoPlace ? 'declined by the engine — for review' : 'awaiting your approval')
-            : 'queue is clear'}
-          deltaClass={s?.open_alerts ? 'text-down' : 'text-muted2'}
+          label="Engine entries"
+          value={overall ? fmtNum(overall.placed) : '—'}
+          valueClass={overall?.placed ? 'text-ace' : ''}
+          delta={autoPlace
+            ? (mode?.oddsFeed && mode?.crossMarket ? 'auto-place · books confirming' : 'auto-place on')
+            : 'auto-place off — turn on in Settings'}
+          deltaClass={autoPlace ? 'text-up' : 'text-amber'}
         />
       </div>
 
-      {/* position + P&L metrics — need trades before they mean anything */}
       <div className="grid grid-cols-4 gap-4 mb-5.5 max-[1180px]:grid-cols-2 max-[420px]:grid-cols-1">
         <StatCard
           label={paper ? 'Desk paper P&L (today)' : "Desk realised P&L (today)"}
@@ -113,8 +112,6 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
         <StatCard
           label="Kalshi balance"
           value={s?.balance_cents != null ? fmtUsd(s.balance_cents / 100) : '—'}
-          /* Never call this "live": it is the last snapshot, refreshed on sync.
-             It once sat six hours stale showing $2,979 against a real $39. */
           delta={s?.balance_cents == null ? 'needs working API credentials'
             : balanceAgeMins == null ? 'from Kalshi'
             : balanceAgeMins < 2 ? 'just now'
@@ -136,30 +133,31 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
         </Panel>
 
         <Panel
-          title="Latest alerts"
-          tools={<ChipBtn onClick={() => onPage('alerts')}>View all</ChipBtn>}
+          title="Shadow desk"
+          tools={<ChipBtn onClick={() => onPage('shadow')}>Open →</ChipBtn>}
           bodyClass="py-2.5 px-3.5"
         >
-          {alerts.length ? alerts.slice(0, 4).map(a => (
-            <div
-              key={a.id}
-              onClick={() => onTrade(a)}
-              className="flex justify-between items-center gap-3 p-2.5 rounded-[10px] text-[13px]
-                         cursor-pointer transition-colors duration-300 hover:bg-white/3"
-            >
-              <span className="text-text font-semibold">
-                {a.player_name}<br />
-                <span className="text-muted2 text-[11px] font-mono">{a.tournament ?? a.matchup}</span>
-              </span>
-              <span className="bg-up/15 text-up py-[3px] px-2.5 rounded-full text-xs font-bold font-mono whitespace-nowrap">
-                {a.edge_cents != null ? `+${a.edge_cents}¢` : fmtPct(a.ev_pct)}
-              </span>
-            </div>
-          )) : (
-            <div className="text-center py-8 text-muted text-[13px]">
-              {loading ? 'Loading…' : 'No open alerts — the desk is scanning.'}
-            </div>
-          )}
+          <div className="text-[13px] text-muted space-y-3 p-2">
+            <p>
+              The risk engine places its own trades. There is no alert queue and no
+              manual override — sizing and approval both come from the shadow desk.
+            </p>
+            {overall ? (
+              <div className="font-mono text-[12.5px] space-y-1.5">
+                <div className="flex justify-between"><span>Placed</span><span className="text-text">{fmtNum(overall.placed)}</span></div>
+                <div className="flex justify-between"><span>Held back</span><span className="text-text">{fmtNum(overall.heldBack)}</span></div>
+                <div className="flex justify-between"><span>Settled P&L</span>
+                  <span className={Number(overall.pnl) > 0 ? 'text-up' : Number(overall.pnl) < 0 ? 'text-down' : 'text-text'}>
+                    {fmtUsd(overall.pnl, { sign: true })}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-6 text-muted2">
+                {shadow.loading || loading ? 'Loading…' : 'No shadow decisions yet.'}
+              </div>
+            )}
+          </div>
         </Panel>
       </div>
 
@@ -171,46 +169,33 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
         <div className="overflow-x-auto">
           <table className="tbl">
             <thead>
-              <tr><th>Match</th><th>Starts</th><th>UTR Δ</th><th>Fair</th><th>Ask</th><th>Edge</th><th>EV</th><th>Status</th><th /></tr>
+              <tr><th>Match</th><th>Starts</th><th>UTR Δ</th><th>Fair</th><th>Ask</th><th>Edge</th><th>EV</th><th>Status</th></tr>
             </thead>
             <tbody>
-              {(hot.data?.markets ?? []).map(m => {
-                const alert = alerts.find(a => a.ticker === m.ticker);
-                return (
-                  <tr key={m.ticker}>
-                    <td>
-                      <div className="font-semibold text-[13.5px]">{m.player_name}</div>
-                      <div className="text-[11.5px] text-muted2 font-mono mt-0.5">{m.tournament ?? m.matchup}</div>
-                    </td>
-                    <td className="font-mono whitespace-nowrap">
-                      {m.occurrence_datetime ? (
-                        <span title={new Date(m.occurrence_datetime).toString()}>
-                          <span className="text-text">{fmtMatchTime(m.occurrence_datetime)}</span>
-                          <span className="block text-[10.5px] text-muted">{fmtCountdown(m.occurrence_datetime)}</span>
-                        </span>
-                      ) : <span className="text-muted2">—</span>}
-                    </td>
-                    <td className="font-mono font-semibold text-ace">{m.utr_gap != null ? `Δ ${m.utr_gap}` : '—'}</td>
-                    <td className="font-mono font-semibold">{m.fair_cents != null ? `${m.fair_cents}¢` : '—'}</td>
-                    <td className="font-mono font-semibold">{m.yes_ask_cents != null ? `${m.yes_ask_cents}¢` : '—'}</td>
-                    <td className="font-mono font-bold text-ace">{m.edge_cents != null ? `+${m.edge_cents}¢` : '—'}</td>
-                    <td className="font-mono font-semibold text-up">{fmtPct(m.ev_pct)}</td>
-                    <td><StatusTag m={m} /></td>
-                    <td>
-                      <button
-                        className="btn btn-up btn-sm"
-                        onClick={() => onTrade(alert)}
-                        disabled={!alert}
-                        title={alert ? 'Review and execute' : 'No open alert for this market'}
-                      >
-                        Trade
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {(hot.data?.markets ?? []).map(m => (
+                <tr key={m.ticker}>
+                  <td>
+                    <div className="font-semibold text-[13.5px]">{m.player_name}</div>
+                    <div className="text-[11.5px] text-muted2 font-mono mt-0.5">{m.tournament ?? m.matchup}</div>
+                  </td>
+                  <td className="font-mono whitespace-nowrap">
+                    {m.occurrence_datetime ? (
+                      <span title={new Date(m.occurrence_datetime).toString()}>
+                        <span className="text-text">{fmtMatchTime(m.occurrence_datetime)}</span>
+                        <span className="block text-[10.5px] text-muted">{fmtCountdown(m.occurrence_datetime)}</span>
+                      </span>
+                    ) : <span className="text-muted2">—</span>}
+                  </td>
+                  <td className="font-mono font-semibold text-ace">{m.utr_gap != null ? `Δ ${m.utr_gap}` : '—'}</td>
+                  <td className="font-mono font-semibold">{m.fair_cents != null ? `${m.fair_cents}¢` : '—'}</td>
+                  <td className="font-mono font-semibold">{m.yes_ask_cents != null ? `${m.yes_ask_cents}¢` : '—'}</td>
+                  <td className="font-mono font-bold text-ace">{m.edge_cents != null ? `+${m.edge_cents}¢` : '—'}</td>
+                  <td className="font-mono font-semibold text-up">{fmtPct(m.ev_pct)}</td>
+                  <td><StatusTag m={m} /></td>
+                </tr>
+              ))}
               {!(hot.data?.markets ?? []).length && (
-                <tr><td colSpan={9} className="text-center text-muted py-8">
+                <tr><td colSpan={8} className="text-center text-muted py-8">
                   {hot.loading ? 'Loading markets…' : 'No mispriced markets above your EV threshold right now.'}
                 </td></tr>
               )}

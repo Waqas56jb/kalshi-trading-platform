@@ -1,8 +1,8 @@
 import { LiveDot } from '../common';
-import { IconBell, IconBurger, IconSearch } from '../Icons';
+import { IconBurger, IconSearch } from '../Icons';
 import { initialsFor } from '../../lib/auth';
 
-export default function Topbar({ query, onQuery, onBurger, onAlerts, health, user, alertCount, onAccount }) {
+export default function Topbar({ query, onQuery, onBurger, health, user, onAccount }) {
   const sync = health?.sync ?? null;
   const dbOk = health?.db?.ok ?? false;
   const latency = sync?.latency_ms ?? null;
@@ -47,17 +47,6 @@ export default function Topbar({ query, onQuery, onBurger, onAlerts, health, use
           <span className="max-[980px]:hidden">{label}</span>
           {latency != null && <span className="font-mono">{latency}ms</span>}
         </div>
-        <button
-          className="w-[38px] h-[38px] rounded-[11px] border border-line2 flex items-center justify-center
-                     text-muted relative transition-all duration-250 hover:text-ace hover:border-ace"
-          onClick={onAlerts}
-          aria-label={alertCount ? `${alertCount} open alerts` : 'Alerts'}
-        >
-          <IconBell width="17" height="17" />
-          {alertCount > 0 && (
-            <span className="absolute top-2 right-[9px] w-[7px] h-[7px] rounded-full bg-down border-2 border-bg" />
-          )}
-        </button>
         <button
           onClick={onAccount}
           title={user ? `${user.name || user.email} · ${user.role}` : undefined}

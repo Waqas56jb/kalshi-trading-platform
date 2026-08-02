@@ -433,59 +433,15 @@ async function recordPlayState(client, rows, settings) {
 }
 
 async function reconcileAlerts(client) {
-  const created = await client.query(
-    `insert into ${t('alerts')}
-       (ticker, event_ticker, player_name, matchup, tournament, utr_gap,
-        fair_cents, market_cents, ev_pct, volume_available, starts_at, side_type)
-     select s.ticker, s.event_ticker, s.player_name, e.matchup, e.tournament, s.utr_gap,
-            s.fair_cents, s.market_cents, s.ev_pct, m.yes_ask_size, m.occurrence_datetime, s.side_type
-     from ${t('signals')} s
-     join ${t('markets')} m on m.ticker = s.ticker
-     left join ${t('events')} e on e.event_ticker = s.event_ticker
-     where s.is_actionable
-       and m.status in ('active','open','initialized')
-       and not exists (
-         select 1 from ${t('alerts')} a where a.ticker = s.ticker and a.status = 'open')
-     on conflict do nothing
-     returning id`,
-  );
-
-  /* Alerts raised before side_type existed have it null; take it from the signal. */
-  await client.query(
-    `update ${t('alerts')} a set side_type = s.side_type
-     from ${t('signals')} s
-     where s.ticker = a.ticker and a.side_type is null and s.side_type is not null`,
-  );
-
-  /* Alerts raised before `starts_at` existed have it null. Fill it in from the
-     market so the countdown works and the expiry below can judge them. */
-  await client.query(
-    `update ${t('alerts')} a set starts_at = m.occurrence_datetime
-     from ${t('markets')} m
-     where m.ticker = a.ticker and a.starts_at is null
-       and m.occurrence_datetime is not null`,
-  );
-
-  /* An alert dies when its signal stops qualifying, when the match starts, or
-     when its start time cannot be established at all. A pre-match edge is not
-     actionable once play is under way, and an alert whose timing is unknown
-     cannot be shown to be pre-match. Entries are pre-match only, always. */
+  /* Manual alert queue is retired — the shadow desk places trades. Stop
+     opening new alerts; expire anything still sitting open so the old queue
+     drains on its own. */
   const expired = await client.query(
     `update ${t('alerts')} a set status = 'expired', resolved_at = now()
      where a.status = 'open'
-       and (
-         a.starts_at <= now()
-         or a.starts_at is null
-         or not exists (
-           select 1 from ${t('signals')} s
-           join ${t('markets')} m on m.ticker = s.ticker
-           where s.ticker = a.ticker and s.is_actionable
-             and m.status in ('active','open','initialized'))
-       )
      returning a.id`,
   );
-
-  return { created: created.rowCount ?? 0, expired: expired.rowCount ?? 0 };
+  return { created: 0, expired: expired.rowCount ?? 0 };
 }
 
 /**

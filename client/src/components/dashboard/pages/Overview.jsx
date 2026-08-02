@@ -23,6 +23,7 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
   const syncAge = data?.sync?.finished_at
     ? Math.round((Date.now() - new Date(data.sync.finished_at).getTime()) / 1000) : null;
   const paper = settings?.paper_trading ?? true;
+  const autoPlace = settings?.shadow_auto_place !== false;
   const balanceAgeMins = s?.balance_at
     ? Math.round((Date.now() - new Date(s.balance_at).getTime()) / 60000) : null;
 
@@ -77,7 +78,9 @@ export default function Overview({ alerts, health, settings, onPage, onTrade, on
           label="Open alerts"
           value={s ? fmtNum(s.open_alerts) : '—'}
           valueClass={s?.open_alerts ? 'text-down' : ''}
-          delta={s?.open_alerts ? 'awaiting your approval' : 'queue is clear'}
+          delta={s?.open_alerts
+            ? (autoPlace ? 'declined by the engine — for review' : 'awaiting your approval')
+            : 'queue is clear'}
           deltaClass={s?.open_alerts ? 'text-down' : 'text-muted2'}
         />
       </div>

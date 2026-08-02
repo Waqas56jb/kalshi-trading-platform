@@ -415,9 +415,14 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
   const bucket = probabilityBucket(conservativeP);
   const used = portfolio.exposure ?? {};
 
+  /* Name the per-bet cap with its actual percent of *riskable* bankroll so a
+     $20 ordinary-cap fill is not read as the 0.2% sub-10% rule. Riskable
+     bankroll is what remains after the cash reserve (default 60% reserved →
+     40% riskable), which is why 0.5% of $4k and 0.2% of $10k both print $20. */
+  const capPctLabel = `${(effectiveCap * 100).toFixed(2)}% of risk bankroll`;
   const constraints = {
     'fractional Kelly': Math.round(riskBankroll * kelly * kellyMultiplier * throttle.multiplier),
-    'per-bet cap': Math.round(riskBankroll * effectiveCap),
+    [`per-bet cap (${capPctLabel})`]: Math.round(riskBankroll * effectiveCap),
     'match exposure': remainingCapacity(riskBankroll, cfg.capMatchExposure, used.match?.[opp.matchId]),
     'player exposure': remainingCapacity(riskBankroll, cfg.capPlayerExposure, used.player?.[opp.playerId]),
     'player daily stake': remainingCapacity(riskBankroll, cfg.capPlayerDailyStake, used.playerDaily?.[opp.playerId]),

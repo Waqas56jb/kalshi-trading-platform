@@ -163,12 +163,16 @@ export function fairFromGap(gap) {
   const g = Math.abs(gap);
 
   let p;                                  // probability the higher-rated player wins
-  /* Anchors aligned to Max's formula: Δ1.0 → ~88–90% (underdog ~10–12c),
-     not the old 85% floor that still sat above what he wanted. */
+  /* Max's anchors, 3 Aug 2026:
+       Δ0.5  → 67–68c favourite
+       Δ0.62 → ~71–72c
+       Δ1.0+ → ~90–92c (underdog ~8–12c)
+     A single logistic cannot hit the mid and the top at once, so this
+     piecewise curve is the desk formula. */
   if (g >= 2.0) p = 99;
-  else if (g >= 1.0) p = 88 + (Math.min(g, 2) - 1) * 11;
-  else if (g >= 0.5) p = 68 + (g - 0.5) * 40;
-  else p = 50 + g * 36;
+  else if (g >= 1.0) p = 90 + (Math.min(g, 2) - 1) * 9;
+  else if (g >= 0.5) p = 67.5 + (g - 0.5) * 45;
+  else p = 50 + g * 35;
 
   // rounded once and mirrored, so the two sides of a match always sum to 100
   const rounded = Math.max(1, Math.min(99, Math.round(p)));
@@ -214,12 +218,13 @@ export function buildSignalsForEvent(markets, players, curve = null, logisticK =
     /* Pricing preference, best evidence first: the smooth logistic fitted to
        settled matches; the bracket-interpolated curve while no slope has been
        fitted yet; the hand-written estimate when there is no fit at all. */
-    /* Logistic first (with Max's k as the floor inside fairFromLogistic), then
-       the bracket curve, then the piecewise anchors. Never leave a gap unpriced
-       when both UTRs are present. */
+    /* Max's piecewise anchors first — they are the numbers the desk wants on
+       the terminal. A usable fitted logistic may refine later; a collapsed one
+       never overrides Max's curve again (the 60c-at-Δ1.1 bug). */
     const fair = gap == null ? null
-      : (fairFromLogistic(gap, logisticK)
-        ?? (curve?.length ? fairFromFittedCurve(gap, curve) : fairFromGap(gap)));
+      : (fairFromGap(gap)
+        ?? fairFromLogistic(gap, logisticK)
+        ?? (curve?.length ? fairFromFittedCurve(gap, curve) : null));
     const price = executablePrice(m);
     const ev = fair != null ? evPct(fair, price) : null;
 

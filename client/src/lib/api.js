@@ -145,6 +145,7 @@ export const api = {
   shadowRun: () => call('POST', '/api/shadow/run'),
   calibration: () => get('/api/calibration'),
   recalibrate: () => call('POST', '/api/calibration/recompute'),
+  simulateFormulas: () => get('/api/model/simulate'),
 
   /* ---- training dataset ---- */
   datasetSummary: range => get(`/api/dataset/summary?range=${range}`),

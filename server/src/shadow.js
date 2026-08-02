@@ -5,6 +5,7 @@ import { evaluateBet, kalshiFeeRate, probabilityBucket, utrBracket } from './ris
 import { calibrationMap, derivedLimits } from './calibration.js';
 import { bookConsensus } from './crossmarket.js';
 import { assessQuote, marketProbability, QUOTE_REASONS } from './quote.js';
+import { autoPlaceApproved } from './orders.js';
 
 /**
  * Shadow trading: the risk engine runs against live markets and real prices,
@@ -239,7 +240,6 @@ async function shadowPortfolio(cfg) {
  */
 export async function runShadowCycle(kalshi, { verbose = false } = {}) {
   const cfg = await loadRiskConfig();
-  if (!cfg.shadowMode) return { skipped: 'shadow_mode_off' };
 
   /* The floor the data supports, not the one someone typed. Everything under 25c
      lost across 237 settled bets, and the sub-10c band went 0 for 134. */
@@ -437,16 +437,40 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
 
   await recordDecisions(decisions, cfg);
 
+  /* Auto-placement — the algorithm approves, nobody clicks. While shadow mode
+     is on this books a labelled paper fill at the real ask; only with shadow
+     mode off, paper trading off and working Kalshi credentials does an order
+     go to the exchange. */
+  let placements = null;
+  if (cfg.shadowAutoPlace) {
+    placements = await autoPlaceApproved(
+      kalshi,
+      decisions.filter(d => d.decision.approved).map(d => ({
+        ticker: d.candidate.ticker,
+        event_ticker: d.candidate.event_ticker,
+        player_name: d.candidate.player_name,
+        opponent_name: d.candidate.opponent_name,
+        fair_cents: d.candidate.fair_cents,
+        entry_cents: d.bestAskCents,
+        contracts: d.decision.contracts,
+        stake_usd: +(d.decision.stakeCents / 100).toFixed(2),
+      })),
+      cfg,
+    ).catch(e => ({ placed: 0, error: String(e.message).slice(0, 160) }));
+  }
+
   const approved = decisions.filter(d => d.decision.approved).length;
   if (verbose) {
     console.log(`  shadow: ${decisions.length} evaluated, ${approved} approved, `
-      + `${books.fetched} books fetched`);
+      + `${placements ? `${placements.placed} placed, ` : ''}${books.fetched} books fetched`);
   }
 
   return {
     evaluated: decisions.length,
     approved,
     rejected: decisions.length - approved,
+    placed: placements?.placed ?? 0,
+    autoPlace: cfg.shadowAutoPlace,
     booksFetched: books.fetched,
     booksFailed: books.failed,
     bankroll: +(portfolio.bankrollCents / 100).toFixed(2),

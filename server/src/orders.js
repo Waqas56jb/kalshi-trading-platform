@@ -232,6 +232,107 @@ export async function executeAlert(kalshi, alertId, { sizeOverride } = {}) {
   }
 }
 
+/**
+ * Places every position the risk engine approved this cycle, without waiting
+ * for anyone to click an alert.
+ *
+ * The client's expectation is that the algorithm approves automatically —
+ * alerts are a notification, not an approval queue. Sizing comes from the risk
+ * engine's own decision (never the flat stake_per_trade), so the manual path's
+ * risk-bypass problem does not exist here.
+ *
+ * Money safety is triple-gated: a real order goes out only when shadow mode is
+ * off, paper trading is off, and Kalshi accepts the credentials. In every other
+ * case the fill is recorded as a labelled paper position at the real ask.
+ */
+export async function autoPlaceApproved(kalshi, placements, cfg) {
+  if (!placements?.length) return { placed: 0, skipped: 0 };
+
+  /* A ticker with an open row in the ledger is already held — approvals repeat
+     every cycle, positions must not. */
+  const { rows: heldRows } = await query(
+    `select ticker from ${t('trades')}
+     where result is null and status in ('pending','partial','filled')
+       and ticker = any($1::text[])`,
+    [placements.map(p => p.ticker)],
+  );
+  const held = new Set(heldRows.map(r => r.ticker));
+
+  const settings = await getSettings();
+  const auth = await checkKalshiAuth(kalshi);
+  const live = !cfg.shadowMode && !settings.paper_trading && auth.ok;
+
+  let placed = 0;
+  let skipped = 0;
+  for (const p of placements) {
+    if (held.has(p.ticker) || !p.contracts || !p.entry_cents) { skipped++; continue; }
+    held.add(p.ticker); // two approvals for one match in a single cycle
+
+    const clientOrderId = crypto.randomUUID();
+    const base = {
+      ticker: p.ticker,
+      event_ticker: p.event_ticker,
+      player_name: p.player_name,
+      matchup: p.opponent_name ? `${p.player_name} vs ${p.opponent_name}` : null,
+      side: 'yes',
+      action: 'buy',
+      entry_cents: p.entry_cents,
+      fair_cents: p.fair_cents ?? null,
+      size_contracts: p.contracts,
+      stake_usd: p.stake_usd,
+      ev_pct: p.fair_cents != null && p.entry_cents
+        ? +(((p.fair_cents - p.entry_cents) / p.entry_cents) * 100).toFixed(2)
+        : null,
+      client_order_id: clientOrderId,
+    };
+
+    try {
+      if (!live) {
+        await insertTrade({
+          ...base,
+          mode: 'paper',
+          status: 'filled',
+          filled_at: new Date().toISOString(),
+          error: null,
+        });
+      } else {
+        const res = await kalshi.createOrder({
+          action: 'buy',
+          side: 'yes',
+          ticker: p.ticker,
+          type: 'limit',
+          count: p.contracts,
+          yes_price: p.entry_cents,
+          client_order_id: clientOrderId,
+          time_in_force: 'fill_or_kill',
+        });
+        const order = res?.order ?? {};
+        await insertTrade({
+          ...base,
+          kalshi_order_id: order.order_id ?? null,
+          status: order.status === 'executed' ? 'filled' : 'pending',
+          raw: res,
+        });
+      }
+      placed++;
+      /* The alert queue must not keep asking for a click on a position the
+         engine has already taken. */
+      await query(
+        `update ${t('alerts')} set status = 'executed', resolved_at = now()
+         where ticker = $1 and status = 'open'`, [p.ticker],
+      );
+    } catch (e) {
+      await insertTrade({
+        ...base, status: 'failed',
+        error: String(e.body?.error?.message || e.message).slice(0, 500),
+      }).catch(() => {});
+      skipped++;
+    }
+  }
+
+  return { placed, skipped, live };
+}
+
 /** Reconciles pending orders and settled positions against Kalshi. */
 export async function reconcileTrades(kalshi) {
   const auth = await checkKalshiAuth(kalshi);

@@ -500,6 +500,11 @@ const SETTABLE = new Set([
   'display_timezone', 'odds_divergence_cents', 'odds_alerts_enabled',
   'min_edge_cents', 'auto_sell_at_fair', 'auto_sell_buffer_cents',
   'take_profit_enabled', 'take_profit_pct', 'stop_loss_enabled', 'stop_loss_pct',
+  /* Everything the Settings page actually sends. These were missing, so every
+     save silently changed nothing while the UI reported success — the client
+     noticed before we did. */
+  'simulated_bankroll_usd', 'minimum_free_cash_fraction',
+  'shadow_mode', 'shadow_auto_place', 'cross_market_enabled',
 ]);
 
 export async function updateSettings(patch) {

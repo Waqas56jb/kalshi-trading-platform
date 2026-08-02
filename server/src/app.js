@@ -11,6 +11,7 @@ import {
 import { toCsv, toXlsx } from './xlsx.js';
 import { runShadowCycle, shadowSummary, loadRiskConfig } from './shadow.js';
 import { recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope } from './calibration.js';
+import { simulateFormulas } from './simulator.js';
 import {
   autoSellAtFair, checkKalshiAuth, closePosition, executeAlert, getAuthState, livePositions,
   reconcileTrades, snapshotPortfolio,
@@ -526,6 +527,21 @@ export function createApp() {
       refitUtrCurve({ minSample: 40 }),
     ]);
     res.json({ calibration, curve });
+  }));
+
+  /* Replays settled matches under three fair-value formulas and reports each
+     one's P&L — how the desk compares candidate formulas on evidence rather
+     than argument. Parameters are clamped, not trusted. */
+  api.get('/model/simulate', requireAuth, h(async (req, res) => {
+    const num = (v, d, lo, hi) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
+    };
+    res.json(await simulateFormulas({
+      minEdgeCents: num(req.query.min_edge, 4, 0, 50),
+      stakeUsd: num(req.query.stake, 100, 1, 10000),
+      floorCents: num(req.query.floor, 25, 1, 95),
+    }));
   }));
 
   /* ---------------------------------------------------------------- dataset */

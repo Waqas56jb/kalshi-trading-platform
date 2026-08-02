@@ -18,6 +18,8 @@ export function ModelPanel() {
 
   return (
     <>
+      <FormulaLab />
+
       <Panel title="Fitted rating curve">
         <div className="text-muted text-[12.5px] mb-4">
           Refitted from settled matches on every sync. Each bracket sits at the mean gap
@@ -99,6 +101,69 @@ export function ModelPanel() {
         </div>
       </Panel>
     </>
+  );
+}
+
+/**
+ * Max's ask, verbatim: "simulate P and L of three different weighted formulas
+ * so we can see how our formula needs to adjust". Every settled match is
+ * replayed at its last pre-close ask under each formula, fees included, and
+ * the favourite/underdog split shows where the money actually comes from.
+ */
+function FormulaLab() {
+  const { data, error } = usePoll(() => api.simulateFormulas(), { intervalMs: 120000 });
+  const rows = data?.formulas ?? [];
+
+  const pnl = v => (
+    <span className={v > 0 ? 'text-up' : v < 0 ? 'text-down' : ''}>
+      {v > 0 ? '+' : ''}{v?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+    </span>
+  );
+
+  return (
+    <Panel title="Formula lab — simulated P&L">
+      <div className="text-muted text-[12.5px] mb-4">
+        Every settled match replayed under three fair-value formulas, entered at the last
+        recorded ask before the pre-match cutoff, $100 a bet, Kalshi fees included. Same
+        matches, same prices — only the formula changes. The favourite/underdog split shows
+        which side of the book each formula's profit depends on.
+      </div>
+      {error && <div className="text-danger text-[12.5px]">Could not load the simulation: {error.message}</div>}
+      <div className="overflow-x-auto">
+        <table className="w-full text-[13px] min-w-[640px]">
+          <thead className="text-muted text-[11.5px] uppercase tracking-wide">
+            <tr>
+              <Th>Formula</Th><Th right>Bets</Th><Th right>Win rate</Th>
+              <Th right>P&L ($)</Th><Th right>ROI</Th>
+              <Th right>Favourites P&L</Th><Th right>Underdogs P&L</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(f => (
+              <tr key={f.id} className="border-t border-line">
+                <Td>{f.name}</Td>
+                <Td right>{fmtNum(f.bets)}</Td>
+                <Td right>{f.winRatePct != null ? `${f.winRatePct}%` : '—'}</Td>
+                <Td right className="font-display font-bold">{pnl(f.pnlUsd)}</Td>
+                <Td right>{f.roiPct != null ? `${f.roiPct}%` : '—'}</Td>
+                <Td right>{pnl(f.favourite?.pnlUsd)} <span className="text-muted2">({fmtNum(f.favourite?.bets)})</span></Td>
+                <Td right>{pnl(f.underdog?.pnlUsd)} <span className="text-muted2">({fmtNum(f.underdog?.bets)})</span></Td>
+              </tr>
+            ))}
+            {!rows.length && !error && (
+              <tr><Td colSpan={7}><span className="text-muted">Running the replay…</span></Td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {data && (
+        <div className="text-muted2 text-[11.5px] font-mono mt-3">
+          {fmtNum(data.sample)} settled matches with a recorded pre-match price ·
+          fitted k = {data.logisticK?.toFixed(2)} · entry rule: edge ≥ {data.params?.minEdgeCents}¢,
+          price ≥ {data.params?.floorCents}¢
+        </div>
+      )}
+    </Panel>
   );
 }
 

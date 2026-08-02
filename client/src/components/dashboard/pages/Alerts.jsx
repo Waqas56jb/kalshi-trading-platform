@@ -52,7 +52,7 @@ export default function Alerts({ state, side, onSide, onDismiss, onDismissAll, o
     <div className="animate-page-in">
       <PageHead
         title="Mispricing alerts"
-        sub="Pre-match only · matches today or later whose book shows no sign of play"
+        sub="Pre-match only · the engine takes approved positions itself — this queue is for visibility and manual override"
         action={
           <div className="flex gap-2.5 items-center flex-wrap max-sm:w-full">
             {!alertsOn && (

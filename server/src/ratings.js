@@ -11,17 +11,29 @@ import { genderForSeries, lookupPlayer } from './utr.js';
 export async function backfillRatings({
   limit = 500, delayMs = 260, retryFailed = false, staleDays = 7, onProgress,
 } = {}) {
+  /* Never-attempted players first, and nobody twice within twelve hours.
+     Without the cooldown, players UTR reports as Unrated keep utr = null and
+     requalify every sync, so the same dozen swallowed the whole per-cycle
+     budget while freshly listed players never got looked up at all — whole
+     tournaments showing no fair value. Failed lookups retry on their own
+     after three days; profiles do appear later for new players. */
   const rows = await query(
-    `select distinct on (p.competitor_id)
-            p.competitor_id, p.name, m.series_ticker
-     from ${t('players')} p
-     join ${t('markets')} m on m.competitor_id = p.competitor_id
-     where (
-             p.utr is null
-             or p.utr_updated_at < now() - ($2 || ' days')::interval
-           )
-       and ($3 or p.lookup_attempted_at is null or p.lookup_failed = false)
-     order by p.competitor_id, m.updated_at desc
+    `select competitor_id, name, series_ticker from (
+       select distinct on (p.competitor_id)
+              p.competitor_id, p.name, m.series_ticker, p.lookup_attempted_at
+       from ${t('players')} p
+       join ${t('markets')} m on m.competitor_id = p.competitor_id
+       where (
+               p.utr is null
+               or p.utr_updated_at < now() - ($2 || ' days')::interval
+             )
+         and ($3 or p.lookup_attempted_at is null or p.lookup_failed = false
+              or p.lookup_attempted_at < now() - interval '3 days')
+         and (p.lookup_attempted_at is null
+              or p.lookup_attempted_at < now() - interval '12 hours')
+       order by p.competitor_id, m.updated_at desc
+     ) q
+     order by q.lookup_attempted_at asc nulls first
      limit $1`,
     [limit, String(staleDays), retryFailed],
   );

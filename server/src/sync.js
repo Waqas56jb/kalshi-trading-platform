@@ -518,7 +518,7 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        nothing else looks them up, which is why only 42 of 92 markets could be
        priced — 29 of the 38 unrated players had never been tried. A match needs
        both sides rated, so every unrated player costs a market. */
-    await backfillRatings({ limit: 12, delayMs: 120 }).catch(() => null);
+    await backfillRatings({ limit: 24, delayMs: 120 }).catch(() => null);
 
     const out = await tx(async client => {
       await upsertPlayers(client, rows);

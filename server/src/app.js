@@ -12,6 +12,7 @@ import { toCsv, toXlsx } from './xlsx.js';
 import { runShadowCycle, shadowSummary, loadRiskConfig } from './shadow.js';
 import { recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope } from './calibration.js';
 import { simulateFormulas } from './simulator.js';
+import { oddsFeedConfigured } from './oddsfeed.js';
 import {
   autoSellAtFair, checkKalshiAuth, closePosition, executeAlert, getAuthState, livePositions,
   reconcileTrades, snapshotPortfolio,
@@ -474,6 +475,7 @@ export function createApp() {
         cashReservePct: Math.round(cfg.minimumFreeCashFraction * 100),
         minPriceCents: cfg.minPriceCents,
         crossMarket: cfg.crossMarketEnabled,
+        oddsFeed: oddsFeedConfigured(),
       },
     });
   }));

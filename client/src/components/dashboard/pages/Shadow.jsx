@@ -42,7 +42,8 @@ export default function Shadow() {
           <Tag className="bg-panel border border-line">{mode.cashReservePct}% CASH RESERVE</Tag>
           <Tag className="bg-panel border border-line">FLOOR {mode.minPriceCents}¢</Tag>
           <Tag className="bg-panel border border-line">
-            BOOKS {mode.crossMarket ? 'CONFIRMING' : 'NOT CONNECTED'}
+            BOOKS {mode.crossMarket && mode.oddsFeed ? 'CONFIRMING'
+              : mode.oddsFeed ? 'CONNECTED — GATE OFF' : 'NOT CONNECTED'}
           </Tag>
         </div>
       )}

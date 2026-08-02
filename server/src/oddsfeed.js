@@ -1,0 +1,161 @@
+/**
+ * Sportsbook odds via the Tennis API (RapidAPI, "Tennis API - ATP WTA ITF").
+ *
+ * Verified against the live product with the desk's own key:
+ *   - Fixtures come from /tennis/v2/{atp|wta}/fixtures. There is no `itf` tour
+ *     type — ITF events live inside atp/wta, marked by tournament rankId 0
+ *     (ITF $10-25K) and 1 (Challenger / ITF above $10K). Asking for `itf`
+ *     returns 400, which is exactly how "the API has no ITF" got believed.
+ *   - Odds come from /tennis/v2/extend/api/odds/summary/{fixtureId}. Books
+ *     post ITF prices close to first serve, so a null result is normal hours
+ *     out and the feed simply reports "no quotes yet".
+ *
+ * Matching to Kalshi is by normalised player-name pair. Everything is cached:
+ * the fixture index for ten minutes, per-fixture odds for five, so a cycle
+ * over the same slate costs almost no requests against the 100/min limit.
+ */
+const HOST = 'tennis-api-atp-wta-itf.p.rapidapi.com';
+
+const apiKey = () => process.env.TENNIS_API_KEY || '';
+export const oddsFeedConfigured = () => Boolean(apiKey());
+
+async function fetchJson(path) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const res = await fetch(`https://${HOST}${path}`, {
+      headers: { 'X-RapidAPI-Key': apiKey(), 'X-RapidAPI-Host': HOST },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`odds feed ${res.status} on ${path}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* Order-insensitive, accent-insensitive name keys, so "Émile Hudd" on the
+   books matches "Emile Hudd" on Kalshi whichever player is listed first. */
+const normName = s => String(s ?? '')
+  .toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^a-z ]/g, ' ')
+  .split(/\s+/).filter(Boolean).sort().join(' ');
+
+const pairKey = (a, b) => [normName(a), normName(b)].sort().join('|');
+
+/* ------------------------------------------------------------ fixture index */
+
+const FIXTURE_TTL_MS = 10 * 60 * 1000;
+let fixtureCache = { at: 0, map: new Map() };
+let fixtureLoad = null;
+
+async function buildFixtureIndex() {
+  const map = new Map();
+  for (const tour of ['atp', 'wta']) {
+    for (let page = 1; page <= 4; page++) {
+      let j;
+      try {
+        j = await fetchJson(
+          `/tennis/v2/${tour}/fixtures?filter=PlayerGroup:singles&pageSize=100&pageNo=${page}`);
+      } catch {
+        break; // partial index is still useful; next refresh retries
+      }
+      for (const f of j?.data ?? []) {
+        const p1 = f?.player1?.name;
+        const p2 = f?.player2?.name;
+        if (!f?.id || !p1 || !p2) continue;
+        map.set(pairKey(p1, p2), { id: f.id, p1, p2 });
+      }
+      if (!j?.hasNextPage) break;
+    }
+  }
+  return map;
+}
+
+async function fixtureIndex() {
+  if (Date.now() - fixtureCache.at < FIXTURE_TTL_MS) return fixtureCache.map;
+  // single in-flight rebuild, however many candidates ask at once
+  fixtureLoad ??= buildFixtureIndex()
+    .then(map => { fixtureCache = { at: Date.now(), map }; return map; })
+    .finally(() => { fixtureLoad = null; });
+  return fixtureLoad;
+}
+
+/* -------------------------------------------------------------------- odds */
+
+const ODDS_TTL_MS = 5 * 60 * 1000;
+const oddsCache = new Map(); // fixtureId -> { at, books }
+let loggedUnknownShape = false;
+
+/**
+ * Extracts per-book decimal odds from the odds summary, oriented to the
+ * fixture's player1/player2.
+ *
+ * The payload shape is the provider's, not ours, so the parser hunts through
+ * the shapes their products use rather than trusting one exact layout. An
+ * unrecognised payload is logged once per process so it can be added, and
+ * parses as "no quotes" rather than guessing.
+ */
+export function parseOddsSummary(payload) {
+  const out = [];
+  const r = payload?.result ?? payload?.data ?? null;
+  if (!r) return out;
+
+  const candidates = [r.bookmakers, r.odds, r.books, r.list, Array.isArray(r) ? r : null]
+    .filter(Array.isArray);
+  for (const list of candidates) {
+    for (const b of list) {
+      if (!b || typeof b !== 'object') continue;
+      const book = b.bookmaker ?? b.bookmakerName ?? b.bookName ?? b.name ?? b.book ?? null;
+      const o1 = Number(b.player1Odds ?? b.homeOdds ?? b.odds1 ?? b.home ?? b.p1 ?? NaN);
+      const o2 = Number(b.player2Odds ?? b.awayOdds ?? b.odds2 ?? b.away ?? b.p2 ?? NaN);
+      if (book && o1 > 1 && o2 > 1) out.push({ book: String(book), forPlayer1: o1, forPlayer2: o2 });
+    }
+    if (out.length) break;
+  }
+
+  if (!out.length && !loggedUnknownShape) {
+    loggedUnknownShape = true;
+    console.log('oddsfeed: unrecognised odds payload:', JSON.stringify(payload).slice(0, 800));
+  }
+  return out;
+}
+
+/**
+ * Bookmaker quotes for one Kalshi market's player, or null when the books
+ * have nothing — no fixture matched, or no odds posted yet.
+ *
+ * Returned quotes are oriented so `decimalOddsFor` prices the named player,
+ * ready for crossmarket.js's de-vig and consensus.
+ */
+export async function quotesForMatch(playerName, opponentName) {
+  if (!oddsFeedConfigured() || !playerName || !opponentName) return null;
+
+  const idx = await fixtureIndex();
+  const fx = idx.get(pairKey(playerName, opponentName));
+  if (!fx) return null;
+
+  let cached = oddsCache.get(fx.id);
+  if (!cached || Date.now() - cached.at > ODDS_TTL_MS) {
+    let books = [];
+    try {
+      books = parseOddsSummary(await fetchJson(`/tennis/v2/extend/api/odds/summary/${fx.id}`));
+    } catch {
+      books = []; // treated as "no quotes"; the TTL retries soon enough
+    }
+    cached = { at: Date.now(), books };
+    oddsCache.set(fx.id, cached);
+  }
+  if (!cached.books.length) return null;
+
+  const playerIsP1 = normName(fx.p1) === normName(playerName);
+  return {
+    fixtureId: fx.id,
+    quotes: cached.books.map(b => ({
+      book: b.book,
+      decimalOddsFor: playerIsP1 ? b.forPlayer1 : b.forPlayer2,
+      decimalOddsAgainst: playerIsP1 ? b.forPlayer2 : b.forPlayer1,
+    })),
+  };
+}

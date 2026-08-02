@@ -6,6 +6,7 @@ import { calibrationMap, derivedLimits } from './calibration.js';
 import { bookConsensus } from './crossmarket.js';
 import { assessQuote, marketProbability, QUOTE_REASONS } from './quote.js';
 import { autoPlaceApproved } from './orders.js';
+import { oddsFeedConfigured, quotesForMatch } from './oddsfeed.js';
 
 /**
  * Shadow trading: the risk engine runs against live markets and real prices,
@@ -302,6 +303,13 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
   const portfolio = await shadowPortfolio(cfg);
   const now = Date.now();
 
+  /* Sportsbook confirmation is only fetched when the gate that consumes it is
+     on, and never for more than the provider's rate budget allows in one
+     cycle. Both caches inside the feed make the budget a worst case, not a
+     steady state. */
+  const useOddsFeed = cfg.crossMarketEnabled && oddsFeedConfigured();
+  let oddsBudget = 30;
+
   const decisions = [];
   for (const c of candidates) {
     // an open position is a fact, not a decision to remake every minute
@@ -381,6 +389,18 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
        express that a projected UTR is a weaker input than a rated one. */
     const dataQuality = c.utr_status === 'Rated' ? 1.0 : 0.7;
 
+    /* Book consensus for the cross-market gate. Null when the books have not
+       priced this match, which for ITF is common until close to first serve —
+       the gate then fails closed by design. `supportingBooks` counts books
+       whose de-vigged probability clears the ask by at least a point, the
+       same individual-book test verifyAgainstBooks applies. */
+    let consensus = null;
+    if (useOddsFeed && oddsBudget > 0) {
+      oddsBudget--;
+      const q = await quotesForMatch(c.player_name, c.opponent_name).catch(() => null);
+      if (q?.quotes?.length) consensus = bookConsensus(q.quotes);
+    }
+
     const opportunity = {
       matchId: c.event_ticker,
       playerId: c.player_name,
@@ -395,9 +415,11 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
       slippage: cfg.expectedSlippage,
       dataQualityScore: dataQuality,
       uncertaintyEstimate: 0,
-      bookConsensus: null,       // filled once the odds feed is live
-      supportingBooks: 0,
-      consensusRange: null,
+      bookConsensus: consensus?.consensus ?? null,
+      supportingBooks: consensus
+        ? consensus.perBook.filter(p => p.probability - priceAtModelTime >= 0.01).length
+        : 0,
+      consensusRange: consensus?.range ?? null,
     };
 
     const decision = evaluateBet({

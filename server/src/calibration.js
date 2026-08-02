@@ -192,7 +192,7 @@ function enforceMonotonic(points) {
  * Newton-Raphson on the log-likelihood; the derivatives are textbook:
  * L'(k) = Σ g·(y − σ(kg)),  L''(k) = −Σ g²·σ(kg)·(1−σ(kg)).
  */
-export function fitLogisticSlope(rows, { k0 = 1.2, priorWeight = 60 } = {}) {
+export function fitLogisticSlope(rows, { k0 = 2.0, priorWeight = 60 } = {}) {
   const data = rows
     .map(r => ({ g: Number(r.gap), y: r.higher_won ? 1 : 0 }))
     .filter(d => Number.isFinite(d.g) && d.g > 0);
@@ -215,10 +215,13 @@ export function fitLogisticSlope(rows, { k0 = 1.2, priorWeight = 60 } = {}) {
   }
 
   /* Same shrinkage philosophy as the brackets: a thin sample stays near the
-     prior slope, a large one lands on its own evidence. */
+     prior slope, a large one lands on its own evidence. Never publish a slope
+     flatter than 1.5 — below that the curve is calling 1-point favourites
+     coin-flips, which is the bug Max screenshotted. */
   const n = data.length;
   const shrunk = (n * k + priorWeight * k0) / (n + priorWeight);
-  return { kRaw: +k.toFixed(4), k: +shrunk.toFixed(4), sample: n };
+  const floored = Math.max(1.5, Math.min(4.0, shrunk));
+  return { kRaw: +k.toFixed(4), k: +floored.toFixed(4), sample: n };
 }
 
 /**
@@ -259,7 +262,10 @@ export async function refitUtrCurve({ minSample = 40, priorWeight = 60 } = {}) {
      match. k0 is the slope the hand-written curve implies at a 0.5 gap
      (ln(65/35)/0.5), so with no data the fit reproduces the documented
      strategy and with data it converges on the measured one. */
-  const slope = fitLogisticSlope(rows, { k0: 1.24, priorWeight });
+  /* Prior k0 = 2.0 matches Max's 10–12c underdog at ~Δ1. Shrinkage never
+     returns a slope flatter than MIN_USABLE — a collapsed fit is what priced
+     a 1.19 gap at 60c. */
+  const slope = fitLogisticSlope(rows, { k0: 2.0, priorWeight });
   if (slope) {
     await query(
       `insert into ${t('derived_limits')} (name, value, unit, sample_size, evidence, computed_at)
@@ -267,7 +273,7 @@ export async function refitUtrCurve({ minSample = 40, priorWeight = 60 } = {}) {
        on conflict (name) do update set
          value = excluded.value, sample_size = excluded.sample_size,
          evidence = excluded.evidence, computed_at = now()`,
-      [slope.k, slope.sample, JSON.stringify({ kRaw: slope.kRaw, kShrunk: slope.k, priorK: 1.24 })],
+      [slope.k, slope.sample, JSON.stringify({ kRaw: slope.kRaw, kShrunk: slope.k, priorK: 2.0 })],
     );
   }
 
@@ -341,12 +347,19 @@ export async function refitUtrCurve({ minSample = 40, priorWeight = 60 } = {}) {
   return { fitted: fitted.length, sample: rows.length, logisticK: slope?.k ?? null, detail: fitted };
 }
 
-/** The fitted logistic slope, or null while there is nothing fitted yet. */
+/** The fitted logistic slope, or null while there is nothing usable fitted yet. */
 export async function loadUtrSlope() {
   const r = await query(
     `select value, sample_size from ${t('derived_limits')} where name = 'utr_logistic_k'`);
   const row = r.rows[0];
-  return row ? { k: Number(row.value), sample: row.sample_size } : null;
+  if (!row) return null;
+  const k = Number(row.value);
+  /* A collapsed slope must not reach the pricing path or the Model page as if
+     it were the live curve — fairFromLogistic also rejects it, belt and braces. */
+  if (!Number.isFinite(k) || k < 1.5 || k > 4.0) {
+    return { k: null, sample: row.sample_size, rejected: k };
+  }
+  return { k, sample: row.sample_size };
 }
 
 /** The fitted curve, ordered by gap, for the model to interpolate over. */

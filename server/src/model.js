@@ -85,22 +85,37 @@ export function parseMarketTitle(title = '', rules = '') {
  * Falls back to the original curve while a bracket still lacks the sample to be
  * worth trusting.
  */
+/*
+ * Max's target, 2 Aug 2026: a player ~1.04 UTR below the opponent should be
+ * about 10–12c, not the mid-20s the collapsed fit was printing. A logistic
+ * with k = 2.0 gives ~11c at Δ−1.04 and ~89c on the favourite — that is the
+ * desk formula until a well-behaved fit proves otherwise.
+ */
+export const MAX_FORMULA_K = 2.0;
+/** Fitted slopes flatter than this are noise from bad historical ratings, not signal. */
+export const MIN_USABLE_LOGISTIC_K = 1.5;
+export const MAX_USABLE_LOGISTIC_K = 4.0;
+
+/** Returns k only when it is steep enough to be a real UTR curve. */
+export function usableLogisticK(k) {
+  if (!Number.isFinite(k)) return null;
+  if (k < MIN_USABLE_LOGISTIC_K || k > MAX_USABLE_LOGISTIC_K) return null;
+  return k;
+}
+
 /**
- * Fair value from the fitted logistic: P(win) = 1/(1 + e^(-k·gap)).
+ * Fair value from the logistic: P(win) = 1/(1 + e^(-k·gap)).
  *
- * This is the pricing curve. It replaced bracket-midpoint interpolation after
- * the client caught the seams on the terminal: a 0.15 gap priced 56c against
- * 59c for 0.35 — three cents for over twice the advantage — while 0.71 and
- * 0.81 both flattened onto 76c past the last bracket anchor. A logistic has
- * no seams and no flat tail: every increase in gap moves the price, in
- * proportion, everywhere on the curve. The slope k is fitted to settled
- * matches by maximum likelihood in calibration.js.
+ * Pricing always uses a usable slope. A fitted k that has collapsed toward
+ * zero (the 1.19-gap → 60c bug on 3 Aug 2026) is rejected and Max's formula
+ * slope is used instead — better a known curve than a flat one that calls
+ * clear favourites coin-flips.
  */
 export function fairFromLogistic(gap, k) {
   if (gap === null || gap === undefined || !Number.isFinite(gap)) return null;
-  if (!Number.isFinite(k) || k <= 0) return null;
+  const slope = usableLogisticK(k) ?? MAX_FORMULA_K;
 
-  const p = 100 / (1 + Math.exp(-k * Math.abs(gap)));
+  const p = 100 / (1 + Math.exp(-slope * Math.abs(gap)));
   // rounded once on the higher-rated side and mirrored, so a match sums to 100
   const rounded = Math.max(1, Math.min(99, Math.round(p)));
   return gap >= 0 ? rounded : 100 - rounded;
@@ -148,10 +163,12 @@ export function fairFromGap(gap) {
   const g = Math.abs(gap);
 
   let p;                                  // probability the higher-rated player wins
+  /* Anchors aligned to Max's formula: Δ1.0 → ~88–90% (underdog ~10–12c),
+     not the old 85% floor that still sat above what he wanted. */
   if (g >= 2.0) p = 99;
-  else if (g >= 1.0) p = 85 + (Math.min(g, 2) - 1) * 14;
-  else if (g >= 0.5) p = 65 + (g - 0.5) * 40;
-  else p = 50 + g * 30;
+  else if (g >= 1.0) p = 88 + (Math.min(g, 2) - 1) * 11;
+  else if (g >= 0.5) p = 68 + (g - 0.5) * 40;
+  else p = 50 + g * 36;
 
   // rounded once and mirrored, so the two sides of a match always sum to 100
   const rounded = Math.max(1, Math.min(99, Math.round(p)));
@@ -197,8 +214,12 @@ export function buildSignalsForEvent(markets, players, curve = null, logisticK =
     /* Pricing preference, best evidence first: the smooth logistic fitted to
        settled matches; the bracket-interpolated curve while no slope has been
        fitted yet; the hand-written estimate when there is no fit at all. */
-    const fair = fairFromLogistic(gap, logisticK)
-      ?? (curve?.length ? fairFromFittedCurve(gap, curve) : fairFromGap(gap));
+    /* Logistic first (with Max's k as the floor inside fairFromLogistic), then
+       the bracket curve, then the piecewise anchors. Never leave a gap unpriced
+       when both UTRs are present. */
+    const fair = gap == null ? null
+      : (fairFromLogistic(gap, logisticK)
+        ?? (curve?.length ? fairFromFittedCurve(gap, curve) : fairFromGap(gap)));
     const price = executablePrice(m);
     const ev = fair != null ? evPct(fair, price) : null;
 

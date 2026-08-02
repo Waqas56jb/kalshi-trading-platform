@@ -52,9 +52,7 @@ export default function Alerts({ state, side, onSide, onDismiss, onDismissAll, o
     <div className="animate-page-in">
       <PageHead
         title="Mispricing alerts"
-        sub={settings?.prematch_only !== false
-          ? 'Pre-match only · matches today or later whose book shows no sign of play'
-          : 'Opportunities above your EV threshold'}
+        sub="Pre-match only · matches today or later whose book shows no sign of play"
         action={
           <div className="flex gap-2.5 items-center flex-wrap max-sm:w-full">
             {!alertsOn && (

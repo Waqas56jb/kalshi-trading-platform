@@ -241,7 +241,6 @@ async function computeSignals(client, rows, settings) {
   const maxSpread = Number(settings.max_spread_cents ?? 12);
   const maxEdge = Number(settings.max_edge_cents ?? 25);
   const minEdge = Number(settings.min_edge_cents ?? 15);
-  const prematchOnly = settings.prematch_only !== false;
   const leadMs = Number(settings.alert_lead_minutes ?? 10) * 60_000;
   const maxAheadMs = Number(settings.alert_max_hours ?? 72) * 3_600_000;
   const now = Date.now();
@@ -293,26 +292,29 @@ async function computeSignals(client, rows, settings) {
 
     /* Pre-match window. The model prices form on paper, not what is happening on
        court, so an in-play quote is not something it can reason about. The lead
-       time keeps out alerts that arrive too late to act on. */
-    if (prematchOnly) {
-      /* Kalshi publishes no start time — `occurrence_datetime` is its expiry
-         estimate and ran 4h33m late on a checked match — so the pre-match test is
-         built from the ticker's match date plus what the book is doing, not from a
-         clock we do not have. */
-      const matchDay = matchDateFromTicker(s.ticker);   // plain YYYY-MM-DD
-      if (!matchDay) return 'no_match_date';
-      if (matchDay < todayPT) return 'match_day_passed';
-      if (matchDay > dayIn(new Date(now + maxAheadMs))) return 'too_far_ahead';
+       time keeps out alerts that arrive too late to act on.
 
-      const act = activity.get(s.ticker);
-      const inPlay = looksInPlay({
-        bid, ask,
-        recentMoveCents: act?.move,
-        volumeGrowth3h: act?.volGrowth,
-        volumeThreshold: volThreshold,
-      });
-      if (inPlay) return inPlay;
-    }
+       This gate is not a setting. The desk's rule is that every entry happens
+       before the match starts, so it cannot be switched off.
+
+       Kalshi publishes no start time — `occurrence_datetime` is its expiry
+       estimate and ran 4h33m late on a checked match — so the pre-match test is
+       built from the ticker's match date plus what the book is doing, not from a
+       clock we do not have. */
+    const matchDay = matchDateFromTicker(s.ticker);   // plain YYYY-MM-DD
+    if (!matchDay) return 'no_match_date';
+    if (matchDay < todayPT) return 'match_day_passed';
+    if (matchDay > dayIn(new Date(now + maxAheadMs))) return 'too_far_ahead';
+
+    const act = activity.get(s.ticker);
+    const inPlay = looksInPlay({
+      bid, ask,
+      recentMoveCents: act?.move,
+      volumeGrowth3h: act?.volGrowth,
+      volumeThreshold: volThreshold,
+    });
+    if (inPlay) return inPlay;
+
     return null;                                     // actionable
   };
 
@@ -425,7 +427,7 @@ async function recordPlayState(client, rows, settings) {
   return rows.length;
 }
 
-async function reconcileAlerts(client, settings) {
+async function reconcileAlerts(client) {
   const created = await client.query(
     `insert into ${t('alerts')}
        (ticker, event_ticker, player_name, matchup, tournament, utr_gap,
@@ -459,16 +461,16 @@ async function reconcileAlerts(client, settings) {
        and m.occurrence_datetime is not null`,
   );
 
-  /* An alert dies when its signal stops qualifying, when the match starts, or —
-     under pre-match-only — when its start time cannot be established at all. A
-     pre-match edge is not actionable once play is under way, and an alert whose
-     timing is unknown cannot be shown to be pre-match. */
+  /* An alert dies when its signal stops qualifying, when the match starts, or
+     when its start time cannot be established at all. A pre-match edge is not
+     actionable once play is under way, and an alert whose timing is unknown
+     cannot be shown to be pre-match. Entries are pre-match only, always. */
   const expired = await client.query(
     `update ${t('alerts')} a set status = 'expired', resolved_at = now()
      where a.status = 'open'
        and (
          a.starts_at <= now()
-         or ($1::boolean and a.starts_at is null)
+         or a.starts_at is null
          or not exists (
            select 1 from ${t('signals')} s
            join ${t('markets')} m on m.ticker = s.ticker
@@ -476,7 +478,6 @@ async function reconcileAlerts(client, settings) {
              and m.status in ('active','open','initialized'))
        )
      returning a.id`,
-    [settings.prematch_only !== false],
   );
 
   return { created: created.rowCount ?? 0, expired: expired.rowCount ?? 0 };
@@ -523,7 +524,7 @@ export async function runSync(kalshi, { verbose = false } = {}) {
       const sig = await computeSignals(client, rows, settings);
       await recordPlayState(client, rows, settings);
       await markUnseenClosed(client, rows);
-      const alerts = await reconcileAlerts(client, settings);
+      const alerts = await reconcileAlerts(client);
       return { events, upserted, ticks, ...sig, ...alerts };
     });
 

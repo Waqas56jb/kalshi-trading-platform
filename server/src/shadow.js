@@ -1,5 +1,6 @@
 import { config, t } from './config.js';
 import { query } from './db.js';
+import { looksInPlay } from './model.js';
 import { evaluateBet, kalshiFeeRate, probabilityBucket, utrBracket } from './risk.js';
 import { calibrationMap, derivedLimits } from './calibration.js';
 import { bookConsensus } from './crossmarket.js';
@@ -247,21 +248,39 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
     cfg.minPriceCents = Math.round(limits.minimum_price.value);
   }
 
+  /* Entries are pre-match only — the client's rule, and the model's too: the
+     UTR signal is a pre-match estimate that says nothing about a match in
+     progress. Three gates, because no single one covers every case:
+       1. play_state — the book-inference flag the sync stamps (volume growth,
+          extreme quotes). Excludes anything already detected as live.
+       2. match_date — the match day must not have passed (Pacific, the tour's
+          operational day used everywhere else in this codebase).
+       3. scheduled_at — when a real schedule source gave us the exact start
+          time, never enter at or after it. Only 'exact' is trusted; Kalshi's
+          placeholder slots are date guesses, not start times. */
   const { rows: candidates } = await query(
     `select m.ticker, m.event_ticker, m.player_name, m.competitor_id,
             m.yes_ask_cents, m.yes_bid_cents, m.yes_ask_size, m.match_date, m.status,
+            m.play_state,
             opp.yes_ask_cents as opponent_ask, opp.yes_bid_cents as opponent_bid,
             s.fair_cents, s.market_cents, s.utr_gap, s.side_type, s.opponent_name,
             s.model, s.computed_at,
             p.utr_status, opp.ticker as opponent_ticker
      from ${t('markets')} m
      join ${t('signals')} s on s.ticker = m.ticker
+     left join ${t('events')} e on e.event_ticker = m.event_ticker
      left join ${t('players')} p on p.competitor_id = m.competitor_id
      left join ${t('markets')} opp
        on opp.event_ticker = m.event_ticker and opp.ticker <> m.ticker
      where m.status in ('active','open','initialized')
        and s.fair_cents is not null
-       and m.yes_ask_cents is not null`);
+       and m.yes_ask_cents is not null
+       and coalesce(m.play_state, 'unknown') <> 'in_play'
+       and coalesce(m.match_date, (now() at time zone 'America/Los_Angeles')::date)
+             >= (now() at time zone 'America/Los_Angeles')::date
+       and (e.schedule_confidence is distinct from 'exact'
+            or e.scheduled_at is null
+            or e.scheduled_at > now())`);
 
   if (!candidates.length) return { evaluated: 0, approved: 0, rejected: 0 };
 
@@ -287,6 +306,26 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
   for (const c of candidates) {
     // an open position is a fact, not a decision to remake every minute
     if (portfolio.heldTickers?.has(c.ticker)) continue;
+
+    /* Backstop for the pre-match gate: play_state can be up to a sync cycle
+       stale, but a quote pinned at the extremes means the match is being
+       decided right now. Recorded as a rejection, not silently skipped, so the
+       decision log shows why the engine stood aside. */
+    if (looksInPlay({ bid: c.yes_bid_cents, ask: c.yes_ask_cents })) {
+      decisions.push({
+        candidate: c,
+        bestAskCents: c.yes_ask_cents,
+        levels: 0,
+        decision: {
+          approved: false,
+          stakeCents: 0,
+          contracts: 0,
+          limitingConstraint: 'match in play',
+          rejectionReason: 'Quote implies the match is in play — entries are pre-match only.',
+        },
+      });
+      continue;
+    }
 
     const book = bookByTicker.get(c.ticker);
 

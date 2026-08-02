@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { t } from './config.js';
 import { query } from './db.js';
+import { looksInPlay } from './model.js';
 import { getAlert, getSettings, insertTrade, resolveAlert } from './repo.js';
 
 /**
@@ -111,6 +112,31 @@ export async function executeAlert(kalshi, alertId, { sizeOverride } = {}) {
   if (!alert) return { ok: false, code: 'alert_not_found', message: 'Alert no longer exists.' };
   if (alert.status !== 'open') {
     return { ok: false, code: 'alert_closed', message: `Alert is already ${alert.status}.` };
+  }
+
+  /* Entries are pre-match only. The alert was pre-match when it was raised, but
+     matches start between raise and click; re-verify against the live market
+     state at the moment of execution, and expire the alert if the window has
+     closed rather than leaving it clickable. */
+  const { rows: [mkt] } = await query(
+    `select m.play_state, m.match_date, m.yes_bid_cents, m.yes_ask_cents,
+            e.scheduled_at, e.schedule_confidence
+     from ${t('markets')} m
+     left join ${t('events')} e on e.event_ticker = m.event_ticker
+     where m.ticker = $1`, [alert.ticker]);
+  if (mkt) {
+    const startedBySchedule = mkt.schedule_confidence === 'exact'
+      && mkt.scheduled_at && new Date(mkt.scheduled_at).getTime() <= Date.now();
+    const inPlay = mkt.play_state === 'in_play'
+      || looksInPlay({ bid: mkt.yes_bid_cents, ask: mkt.yes_ask_cents }) != null;
+    if (startedBySchedule || inPlay) {
+      await resolveAlert(alert.id, 'expired');
+      return {
+        ok: false,
+        code: 'match_started',
+        message: 'This match has started — entries are pre-match only.',
+      };
+    }
   }
 
   const settings = await getSettings();

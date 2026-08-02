@@ -110,10 +110,10 @@ export async function priceHistory(ticker, limit = 200) {
  */
 export async function expireStartedAlerts() {
   const r = await query(
-    `with cfg as (select prematch_only, alert_lead_minutes from ${t('settings')} where id = 1)
+    `with cfg as (select alert_lead_minutes from ${t('settings')} where id = 1)
      update ${t('alerts')} a set status = 'expired', resolved_at = now()
      from cfg
-     where a.status = 'open' and cfg.prematch_only
+     where a.status = 'open'
        and (
          a.starts_at is null
          or a.starts_at <= now() + make_interval(mins => cfg.alert_lead_minutes)
@@ -473,12 +473,15 @@ export async function getSettings() {
   return r.rows[0];
 }
 
+/* `prematch_only` and `inplay_enabled` are deliberately absent: entries are
+   pre-match only as a hard rule of the desk, not a preference, so nothing is
+   allowed to switch that off through the settings API. */
 const SETTABLE = new Set([
   'min_ev_threshold', 'stake_per_trade', 'max_exposure_per_match', 'min_utr_gap',
   'manual_approval', 'sweep_full_volume', 'pushover_enabled', 'sms_fallback',
-  'inplay_enabled', 'bot_enabled', 'paper_trading',
+  'bot_enabled', 'paper_trading',
   'min_bid_cents', 'max_spread_cents', 'max_edge_cents', 'inplay_volume_threshold',
-  'prematch_only', 'alert_lead_minutes', 'alert_max_hours', 'sound_enabled',
+  'alert_lead_minutes', 'alert_max_hours', 'sound_enabled',
   'display_timezone', 'odds_divergence_cents', 'odds_alerts_enabled',
   'min_edge_cents', 'auto_sell_at_fair', 'auto_sell_buffer_cents',
   'take_profit_enabled', 'take_profit_pct', 'stop_loss_enabled', 'stop_loss_pct',

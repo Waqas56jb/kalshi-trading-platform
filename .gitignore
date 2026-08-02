@@ -12,3 +12,4 @@ dist/
 kalshi_private_key*
 
 .vercel
+audit.txt

@@ -145,13 +145,36 @@ export async function executeAlert(kalshi, alertId, { sizeOverride } = {}) {
     return { ok: false, code: 'no_price', message: 'Market has no executable ask right now.' };
   }
 
-  const stake = Number(settings.stake_per_trade);
-  // contracts payout $1 each, so cost per contract is price/100 dollars
-  let contracts = Math.max(1, Math.floor((stake * 100) / priceCents));
+  /* Size from the risk engine's last decision for this ticker when present.
+     The old path used settings.stake_per_trade (default $250) and ignored the
+     per-bet cap — that is how Emma Slavikova landed at $249.84 in the ledger
+     while the shadow desk showed a $20 limit on the same name. */
+  const bankrollUsd = Number(settings.simulated_bankroll_usd ?? 10000);
+  const reserve = Number(settings.minimum_free_cash_fraction ?? 0.60);
+  const capOrdinary = Number(settings.cap_ordinary ?? 0.005);
+  const riskBankrollCents = Math.max(1, Math.round(bankrollUsd * (1 - reserve) * 100));
+  const maxPerBetCents = Math.round(riskBankrollCents * capOrdinary);
+
+  const { rows: [eng] } = await query(
+    `select stake_usd, contracts from ${t('shadow_trades')}
+     where ticker = $1 and contracts > 0
+     order by match_date desc, id desc limit 1`, [alert.ticker]);
+
+  let contracts;
+  if (sizeOverride) {
+    contracts = Math.max(1, Math.floor(sizeOverride));
+  } else if (eng?.contracts) {
+    contracts = Math.max(1, Math.floor(Number(eng.contracts)));
+  } else {
+    const stakeCents = Math.min(Number(settings.stake_per_trade) * 100 || maxPerBetCents, maxPerBetCents);
+    contracts = Math.max(1, Math.floor(stakeCents / priceCents));
+  }
+  // hard ceiling — override included — so no path can reprint the $250 bug
+  const capped = Math.max(1, Math.floor(maxPerBetCents / priceCents));
+  contracts = Math.min(contracts, capped);
   if (settings.sweep_full_volume && alert.volume_available) {
     contracts = Math.min(contracts, Math.max(1, Math.floor(Number(alert.volume_available))));
   }
-  if (sizeOverride) contracts = Math.max(1, Math.floor(sizeOverride));
 
   const clientOrderId = crypto.randomUUID();
   const base = {

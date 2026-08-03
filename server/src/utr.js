@@ -98,10 +98,23 @@ const COMMON_SURNAMES = new Set([
   'vo', 'nguyen', 'smith', 'jones', 'brown', 'garcia', 'martin', 'lopez',
 ]);
 
+/**
+ * Given-name agreement, including Kalshi initials ("J. Wang" → "Jiaqi Wang").
+ * Exact token match OR single-letter initial vs first letter of a given name.
+ */
 function givenNameOverlap(a, b) {
   if (a.length < 2 || b.length < 2) return 0;
-  const setB = new Set(b.slice(0, -1)); // everything except surname
-  return a.slice(0, -1).filter(t => setB.has(t)).length;
+  const aGiven = a.slice(0, -1);
+  const bGiven = b.slice(0, -1);
+  let n = 0;
+  for (const t of aGiven) {
+    if (bGiven.includes(t)) { n += 1; continue; }
+    if (t.length === 1 && bGiven.some(u => u.startsWith(t))) n += 1;
+  }
+  for (const t of bGiven) {
+    if (t.length === 1 && aGiven.some(u => u.startsWith(t))) n += 1;
+  }
+  return n;
 }
 
 /**
@@ -135,7 +148,8 @@ export function nameScore(kalshiName, utrName) {
   if (commonSur) {
     const given = givenNameOverlap(a, b);
     if (!given) return Math.min(base, 0.45); // below lookup minScore — refuse
-    return Math.min(1, base + 0.20);
+    /* Initial matches ("J Wang"→"Jiaqi Wang") need to clear minScore 0.72. */
+    return Math.min(1, Math.max(base + 0.25, 0.78));
   }
 
   return Math.min(1, base + 0.15);
@@ -181,7 +195,9 @@ async function searchUtr(name, { signal, top = 8 } = {}) {
 export async function lookupPlayer(name, {
   gender, minScore = 0.72, minMargin = 0.12, preferRated = true, signal,
 } = {}) {
-  const hits = await searchUtr(name, { signal });
+  const sur = tokens(name).slice(-1)[0];
+  const top = COMMON_SURNAMES.has(sur) ? 20 : 8;
+  const hits = await searchUtr(name, { signal, top });
   if (!hits.length) return null;
 
   const scored = hits

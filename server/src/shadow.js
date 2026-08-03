@@ -376,29 +376,13 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
        had at 14% came to be shown as "94% on Kalshi". When the pair is not a real
        book there is no anchor, and the opportunity is dropped rather than shrunk
        toward a number nobody was offering. */
-    let market = marketProbability({
+    /* Buy YES at the ask only — bid / other side do not decide tradability. */
+    const market = marketProbability({
       bid: c.yes_bid_cents,
       ask: c.yes_ask_cents,
       opponentBid: c.opponent_bid,
       opponentAsk: c.opponent_ask,
     });
-    /* Max: if our ask is already better than UTR fair, ignore the other side. */
-    const askBeatsFair = c.fair_cents != null && c.yes_ask_cents != null
-      && c.yes_ask_cents < c.fair_cents
-      && c.yes_ask_cents >= 12 && c.yes_ask_cents <= 80;
-    if (market.probability == null && askBeatsFair) {
-      const mid = c.yes_bid_cents != null
-        ? (c.yes_bid_cents + c.yes_ask_cents) / 2
-        : c.yes_ask_cents;
-      market = {
-        probability: mid / 100,
-        tradable: true,
-        reason: null,
-        oneSided: true,
-        spread: c.yes_bid_cents != null ? c.yes_ask_cents - c.yes_bid_cents : null,
-        overround: null,
-      };
-    }
     if (market.probability == null) {
       decisions.push({
         candidate: c,

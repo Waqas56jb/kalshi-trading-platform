@@ -42,7 +42,7 @@ export default function Shadow() {
           <Tag className="bg-panel border border-line">{mode.cashReservePct}% CASH RESERVE</Tag>
           <Tag
             className="bg-panel border border-line"
-            title="Derived risk floor (typically ~25¢). The 35–50¢ band in the tilt audit is an underdog price bucket, not a hard hold rule."
+            title="Hard buy floor (capped at 25¢). If this ever reads near 50¢ that is a bug — tell us."
           >
             PRICE FLOOR {mode.minPriceCents}¢
           </Tag>
@@ -59,11 +59,10 @@ export default function Shadow() {
       )}
 
       <div className="mb-5 rounded-card border border-line2 bg-panel p-3.5 text-[12.5px] text-muted">
-        Holds for “price floor” use the live derived floor above (usually ~{mode?.minPriceCents ?? 25}¢),
-        not a fixed 50¢ rule. The <span className="text-text">35–50¢</span> row in the tilt audit is just
-        how underdog stakes are bucketed for reporting.         Odds checker is a <span className="text-text">size upgrade</span>, not a wait:
-        place on Kalshi edge now at reduced stake; full stake only when books confirm.
-        We do not sit on a ticket waiting for late ITF lines.
+        Buys use the <span className="text-text">ask only</span> (bid irrelevant, pre-match).
+        Price floor is capped at <span className="text-text">{mode?.minPriceCents ?? 25}¢</span> — never 50¢.
+        Odds checker is a <span className="text-text">size upgrade</span>, not a wait.
+        The 35–50¢ row below is reporting only.
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">

@@ -4,7 +4,9 @@ import { snapshotPortfolio, autoSellAtFair } from './orders.js';
 import { importKalshiHistory } from './importer.js';
 import { backfillRatings, scrubUnusableRatings } from './ratings.js';
 import { syncSettlements } from './settlements.js';
-import { runShadowCycle, settleShadowTrades, archivePreNewFormulaDesk } from './shadow.js';
+import {
+  runShadowCycle, settleShadowTrades, archivePreNewFormulaDesk, paperReplayWrongHolds,
+} from './shadow.js';
 import { settleResolvedTrades, tagOversizedAlertPathFills } from './repo.js';
 import {
   recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope, deriveMinimumPrice,
@@ -539,6 +541,10 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     const shadow = await runShadowCycle(kalshi).catch(e => ({
       error: String(e.message).slice(0, 160),
     }));
+    /* Paper-fill today's wrongly held edges at the ask we already recorded. */
+    /* Reanalyze held bets under new formula; paper-fill at recorded ask. */
+    const replay = await paperReplayWrongHolds({ hours: 72, stakeUsd: 20, limit: 500 })
+      .catch(e => ({ error: String(e.message).slice(0, 120) }));
     await settleShadowTrades().catch(() => null);
 
     /* Paper and live fills settle themselves once Kalshi has a result — no
@@ -580,7 +586,9 @@ export async function runSync(kalshi, { verbose = false } = {}) {
         `exits=${exits.closed ?? 0} settled+${settled.updated ?? 0} ` +
         `shadow=${shadow.approved ?? 0}/${shadow.evaluated ?? 0} ${latency}ms`);
     }
-    return { ok: true, runId, latency, marketsSeen: rows.length, ...out, exits, settled, shadow };
+    return {
+      ok: true, runId, latency, marketsSeen: rows.length, ...out, exits, settled, shadow, replay,
+    };
   } catch (e) {
     await query(
       `update ${t('sync_runs')} set status='error', finished_at=now(), error=$2, latency_ms=$3 where id=$1`,

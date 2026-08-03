@@ -58,12 +58,12 @@ export function marketProbability({ bid, ask, opponentBid = null, opponentAsk = 
   return { probability: ask / 100, ...assessment };
 }
 
-/** Human-readable, for the terminal. */
+/** Human-readable, for the terminal. Ask-only path — no spread/both-sides copy. */
 export const QUOTE_REASONS = {
   no_ask: 'No ask quoted',
-  book_is_empty: 'No real market — both sides quoted far apart',
-  spread_not_a_market: 'Spread too wide to be a market',
-  placeholder_quote: 'Placeholder quote, nobody is offering',
-  degenerate_price: 'Price is at the boundary',
-  ask_out_of_band: 'Ask outside the buy band',
+  book_is_empty: 'No ask available to buy',
+  spread_not_a_market: 'Ask not tradable',
+  placeholder_quote: 'Placeholder ask (≥90¢) — not a buy',
+  degenerate_price: 'Ask is at the boundary',
+  ask_out_of_band: 'Ask outside the 12–85¢ buy band',
 };

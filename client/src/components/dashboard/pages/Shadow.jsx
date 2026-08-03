@@ -82,7 +82,7 @@ export default function Shadow() {
       )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-        <Stat label="Placed" value={s ? fmtNum(s.placed) : '—'} sub={`${fmtNum(s?.heldBack ?? 0)} held back`} />
+        <Stat label="Placed" value={s ? fmtNum(s.placed) : '—'} sub={`${fmtNum(s?.heldBack ?? 0)} held (24h)`} />
         <Stat label="Settled" value={s ? fmtNum(s.settled) : '—'}
           sub={s?.winRate != null ? `${Math.round(s.winRate * 100)}% won` : 'none yet'} />
         <Stat label="Staked" value={s ? fmtUsd(s.staked) : '—'} sub={`${fmtUsd(s?.atRisk ?? 0)} at risk`} />

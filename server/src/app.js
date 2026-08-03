@@ -11,7 +11,7 @@ import {
 import { toCsv, toXlsx } from './xlsx.js';
 import {
   runShadowCycle, shadowSummary, loadRiskConfig, gateComparison,
-  archivePreNewFormulaDesk, NEW_FORMULA_SINCE,
+  archivePreNewFormulaDesk, paperReplayWrongHolds, NEW_FORMULA_SINCE,
 } from './shadow.js';
 import { recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope } from './calibration.js';
 import { simulateFormulas } from './simulator.js';
@@ -486,7 +486,10 @@ export function createApp() {
         autoPlace: cfg.shadowAutoPlace,
         bankroll: cfg.simulatedBankrollCents / 100,
         cashReservePct: Math.round(cfg.minimumFreeCashFraction * 100),
-        minPriceCents: Math.min(25, cfg.minPriceCents),
+        /* Live capped floor from summary — not the uncapped settings row. */
+        minPriceCents: summary.floor?.live
+          ?? Math.min(25, Math.max(15, cfg.minPriceCents)),
+        floorRaw: summary.floor?.raw ?? null,
         crossMarket: cfg.crossMarketEnabled,
         oddsFeed: oddsFeedConfigured(),
         deskSince: NEW_FORMULA_SINCE,
@@ -527,6 +530,11 @@ export function createApp() {
 
   api.post('/shadow/run', requireAuth, h(async (_req, res) => {
     res.json(await runShadowCycle(kalshi, { verbose: false }));
+  }));
+
+  /** One-shot paper replay of wrongly held asks for learning (Max/Robbie). */
+  api.post('/shadow/replay-holds', requireAuth, h(async (_req, res) => {
+    res.json(await paperReplayWrongHolds({ hours: 48, stakeUsd: 20 }));
   }));
 
   /* ------------------------------------------------------------ calibration */

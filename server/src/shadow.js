@@ -6,6 +6,7 @@ import { calibrationMap, derivedLimits } from './calibration.js';
 import { bookConsensus } from './crossmarket.js';
 import { marketProbability, QUOTE_REASONS } from './quote.js';
 import { autoPlaceApproved } from './orders.js';
+import { insertTrade } from './repo.js';
 import { oddsFeedConfigured, quotesForMatch } from './oddsfeed.js';
 
 /**
@@ -277,7 +278,7 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
             m.play_state,
             opp.yes_ask_cents as opponent_ask, opp.yes_bid_cents as opponent_bid,
             s.fair_cents, s.market_cents, s.utr_gap, s.side_type, s.opponent_name,
-            s.model, s.computed_at,
+            s.model, s.computed_at, s.is_actionable, s.review_reason,
             p.utr_status, p.utr_match_score, p.utr_matched_name,
             opp.ticker as opponent_ticker
      from ${t('markets')} m
@@ -305,6 +306,7 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
     .filter(c => c.yes_ask_cents >= cfg.minPriceCents
       && (c.fair_cents - c.market_cents) >= Math.round(cfg.minNetEdge * 100))
     .map(c => c.ticker);
+  const worthSet = new Set(worthFetching);
   const books = await refreshOrderBooks(kalshi, worthFetching);
 
   const bookRows = await query(
@@ -350,23 +352,39 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
 
     const book = bookByTicker.get(c.ticker);
 
-    /* Markets pre-filtered out of the depth fetch still get evaluated, using the
-       top-of-book quote the sync already stored as a one-level ladder. Without
-       this they came back as "no executable ask liquidity", which was simply
-       untrue — we had a quote, we just had not asked for the ladder behind it —
-       and it buried the real reasons under a made-up one. */
-    const asks = book?.asks?.length
+    /* Prefer the refreshed ladder. Sync fallback only with real resting size —
+       inventing depth from a size-0 print was phantom liquidity (audit P1).
+       Candidates we never fetched (pre-filtered on price/edge) still get a
+       1-contract eval ladder so the real gate (floor/edge) is recorded, not
+       a fake "no liquidity" hold. */
+    const syncSize = Number(c.yes_ask_size);
+    let asks = book?.asks?.length
       ? book.asks
-      : (c.yes_ask_cents != null
-        /* Prefer resting size; if Kalshi prints an ask with size 0 in the sync
-           snapshot (common on ITF), still evaluate one contract so a live 35¢
-           print is not dropped as "no liquidity" before the next book refresh. */
-        ? [{
-          price: c.yes_ask_cents / 100,
-          contracts: Math.max(1, Number(c.yes_ask_size) || 0),
-        }]
+      : (c.yes_ask_cents != null && Number.isFinite(syncSize) && syncSize > 0
+        ? [{ price: c.yes_ask_cents / 100, contracts: syncSize }]
         : []);
+    if (!asks.length && !worthSet.has(c.ticker) && c.yes_ask_cents != null) {
+      asks = [{ price: c.yes_ask_cents / 100, contracts: 1 }];
+    }
     const bestAskCents = book?.best_ask ?? c.yes_ask_cents;
+
+    /* Sync said the market violently disagrees with the model (injury /
+       withdrawal territory). Shadow must not approve past that flag. */
+    if (c.review_reason === 'market_disagrees_strongly') {
+      decisions.push({
+        candidate: c,
+        bestAskCents: c.yes_ask_cents,
+        levels: 0,
+        decision: {
+          approved: false,
+          stakeCents: 0,
+          contracts: 0,
+          limitingConstraint: 'market disagrees',
+          rejectionReason: 'Sync flagged market_disagrees_strongly — model edge too large vs ask.',
+        },
+      });
+      continue;
+    }
 
     const modelProbability = c.fair_cents / 100;
 
@@ -656,11 +674,11 @@ async function recordDecisions(decisions, cfg) {
  * A YES contract pays $1 if the player won and nothing if not, so P&L is the
  * payout less what the fill and fees actually cost.
  */
-/* The rejections the cross-market gate is solely responsible for. Settled
-   outcomes are recorded for these too, or "would the formula alone have won"
-   could never be answered. */
-const CROSS_MARKET_CONSTRAINTS = [
+/* Holds we still settle for learning (outcome without desk P&L unless approved).
+   Includes the Aug-4 wrong gates so the 488-hold day teaches the DB. */
+const LEARNING_CONSTRAINTS = [
   'cross-market data', 'cross-market edge', 'supporting books', 'consensus dispersion',
+  'no real market', 'price floor',
 ];
 
 export async function settleShadowTrades() {
@@ -680,11 +698,170 @@ export async function settleShadowTrades() {
      from ${t('markets')} m
      where m.ticker = st.ticker
        and st.archived_at is null
-       and (st.approved or st.limiting_constraint = any($1))
+       and (st.approved
+            or st.limiting_constraint = any($1)
+            or st.rejection_reason ilike '%spread%'
+            or st.rejection_reason ilike '%no real market%'
+            or st.rejection_reason ilike '%floor%')
        and st.result is null
        and m.result in ('yes','no')`,
-    [CROSS_MARKET_CONSTRAINTS]);
+    [LEARNING_CONSTRAINTS]);
   return { settled: r.rowCount ?? 0 };
+}
+
+/**
+ * Reanalyze held shadow decisions under the new formula for matches that have
+ * not started. Paper-fills at the *recorded* ask when the new gates would take
+ * the ticket — Max/Robbie learning path for the ~488-hold day.
+ *
+ * Idempotent: skips tickers that already have a ledger fill.
+ * Permanent holds (UTR not Rated, in-play, name verify) stay held.
+ */
+export async function paperReplayWrongHolds({ hours = 72, stakeUsd = 20, limit = 500 } = {}) {
+  await ensureShadowArchiveColumn();
+  const cfg = await loadRiskConfig();
+  const floor = Math.min(25, Math.max(15, cfg.minPriceCents ?? 25));
+
+  /* Permanent holds the new formula still rejects — never paper-force these. */
+  const permanent = [
+    'utr not rated', 'match in play', 'verify name (Δ≥2)', 'market disagrees',
+    'system health', 'probability floor',
+  ];
+
+  const { rows } = await query(
+    `select st.ticker, st.event_ticker, st.player_name, st.opponent_name,
+            st.best_ask_cents, st.match_date, st.limiting_constraint, st.rejection_reason,
+            st.model_probability, st.utr_gap, st.fee_rate,
+            coalesce(s.fair_cents, round(st.model_probability * 100))::int as fair_cents,
+            s.review_reason, s.computed_at,
+            p.utr_status, p.utr_match_score,
+            m.play_state, m.status as market_status, m.yes_ask_cents as live_ask
+     from ${t('shadow_trades')} st
+     left join ${t('signals')} s on s.ticker = st.ticker
+     left join ${t('markets')} m on m.ticker = st.ticker
+     left join ${t('players')} p on p.competitor_id = m.competitor_id
+     left join ${t('events')} e on e.event_ticker = st.event_ticker
+     where st.archived_at is null
+       and st.approved = false
+       and st.result is null
+       and st.created_at > now() - ($1 || ' hours')::interval
+       and st.best_ask_cents between $2 and 85
+       and coalesce(s.fair_cents, round(st.model_probability * 100))
+             >= st.best_ask_cents + 3
+       and coalesce(st.limiting_constraint, '') <> all($3::text[])
+       and coalesce(s.review_reason, '') <> 'market_disagrees_strongly'
+       and coalesce(m.play_state, 'unknown') <> 'in_play'
+       and coalesce(m.status, 'active') in ('active','open','initialized')
+       and coalesce(st.match_date, (now() at time zone 'America/Los_Angeles')::date)
+             >= (now() at time zone 'America/Los_Angeles')::date
+       and (e.schedule_confidence is distinct from 'exact'
+            or e.scheduled_at is null
+            or e.scheduled_at > now())
+       and not exists (
+             select 1 from ${t('trades')} tr
+             where tr.ticker = st.ticker and tr.archived_at is null
+               and tr.status in ('pending','partial','filled','settled')
+           )
+     order by st.created_at desc
+     limit $4`,
+    [String(hours), floor, permanent, limit],
+  );
+
+  let replayed = 0;
+  let skipped = 0;
+  const now = Date.now();
+
+  for (const r of rows) {
+    const ask = Number(r.best_ask_cents);
+    if (!ask) { skipped += 1; continue; }
+    if (r.utr_status && r.utr_status !== 'Rated') { skipped += 1; continue; }
+
+    /* New-formula check at the *recorded* ask (learning fill price). */
+    const contractsDepth = Math.max(1, Math.floor((stakeUsd * 100) / ask));
+    const decision = evaluateBet({
+      opportunity: {
+        matchId: r.event_ticker,
+        playerId: r.player_name,
+        modelSignalId: 'utr_gap_v1',
+        modelProbability: (r.fair_cents ?? Math.round(Number(r.model_probability) * 100)) / 100,
+        marketReferenceProbability: ask / 100,
+        priceAtModelTime: ask / 100,
+        modelTimestamp: r.computed_at ? new Date(r.computed_at).getTime() : now,
+        marketSnapshotTimestamp: now,
+        orderBookAsks: [{ price: ask / 100, contracts: contractsDepth }],
+        feeRate: Number(r.fee_rate) || kalshiFeeRate(ask / 100),
+        slippage: cfg.expectedSlippage,
+        dataQualityScore: 1,
+        uncertaintyEstimate: 0,
+        bookConsensus: null,
+        supportingBooks: 0,
+        oddsMissReason: 'replay_recorded_ask',
+      },
+      portfolio: {
+        bankrollCents: cfg.simulatedBankrollCents,
+        cashCents: cfg.simulatedBankrollCents,
+        unsettledCents: 0,
+        dailyRealisedCents: 0,
+        weeklyPeakCents: cfg.simulatedBankrollCents,
+        exposure: { match: {}, player: {}, playerDaily: {}, bucket: {}, signal: {} },
+      },
+      calibration: null,
+      health: { healthy: true },
+      cfg,
+      now,
+    });
+
+    if (!decision.approved) { skipped += 1; continue; }
+
+    const contracts = Math.max(1, Math.floor(decision.contracts || contractsDepth));
+    const stake = +((contracts * ask) / 100).toFixed(2);
+
+    await query(
+      `update ${t('shadow_trades')} set
+         approved = true,
+         stake_usd = $2,
+         contracts = $3,
+         limiting_constraint = 'replay_wrong_hold',
+         rejection_reason = left('Reanalyzed under new formula @ recorded '
+           || $5::text || '¢ ask — was: '
+           || coalesce(rejection_reason, limiting_constraint, ''), 500),
+         created_at = now()
+       where ticker = $1 and match_date is not distinct from $4
+         and approved = false and result is null`,
+      [r.ticker, stake, contracts, r.match_date, String(ask)],
+    );
+
+    await insertTrade({
+      ticker: r.ticker,
+      event_ticker: r.event_ticker,
+      player_name: r.player_name,
+      matchup: r.opponent_name ? `${r.player_name} vs ${r.opponent_name}` : null,
+      side: 'yes',
+      action: 'buy',
+      entry_cents: ask,
+      fair_cents: r.fair_cents,
+      size_contracts: contracts,
+      stake_usd: stake,
+      ev_pct: r.fair_cents != null
+        ? +(((r.fair_cents - ask) / ask) * 100).toFixed(2) : null,
+      mode: 'paper',
+      status: 'filled',
+      filled_at: new Date().toISOString(),
+      client_order_id: crypto.randomUUID(),
+    }).catch(() => null);
+
+    await query(
+      `update ${t('trades')} set sizing_note = 'replay_wrong_hold'
+       where ticker = $1 and sizing_note is null
+         and mode = 'paper' and status = 'filled'
+         and placed_at > now() - interval '5 minutes'`,
+      [r.ticker],
+    ).catch(() => null);
+
+    replayed += 1;
+  }
+
+  return { considered: rows.length, replayed, skipped, stakeUsd, hours, floor };
 }
 
 /* When the odds feed went live and book data started being recorded. Rows
@@ -752,7 +929,7 @@ export async function gateComparison({ stakeUsd = 100 } = {}) {
        and best_ask_cents between 1 and 99
        and (approved or limiting_constraint = any($1))
        and created_at >= $2`,
-    [CROSS_MARKET_CONSTRAINTS, ODDS_FEED_LIVE_SINCE]);
+    [LEARNING_CONSTRAINTS, ODDS_FEED_LIVE_SINCE]);
 
   const mk = () => ({ bets: 0, wins: 0, stakedUsd: 0, pnlUsd: 0 });
   const cohorts = { confirmed: mk(), formulaAlone: mk() };
@@ -799,9 +976,10 @@ export async function shadowSummary() {
   const [overall, brackets, reasons, priceBands] = await Promise.all([
     query(`select
         count(*) filter (where approved)::int placed,
-        count(*) filter (where not approved)::int held_back,
+        /* Held headline = last 24h — all-time rejects buried today's desk. */
+        count(*) filter (where not approved
+          and created_at > now() - interval '24 hours')::int held_back,
         count(*) filter (where approved and result is not null)::int settled,
-        -- gate-rejected rows also carry results now; only real positions count here
         count(*) filter (where approved and result = 'won')::int won,
         coalesce(sum(stake_usd) filter (where approved), 0)::numeric staked,
         coalesce(sum(pnl_usd) filter (where approved), 0)::numeric pnl,

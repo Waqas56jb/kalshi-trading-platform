@@ -1,6 +1,6 @@
 import { t } from './config.js';
 import { query } from './db.js';
-import { genderForSeries, lookupPlayer } from './utr.js';
+import { COMMON_SURNAMES, genderForSeries, lookupPlayer } from './utr.js';
 
 /**
  * Fills in UTR ratings for competitors we have seen in Kalshi markets.
@@ -116,18 +116,18 @@ export async function scrubUnusableRatings() {
              utr is not null and coalesce(utr_match_score, 0) < 0.72
            )
         /* Common surnames: scrub when first initial/name disagrees with match
-           (Thamchaiwat's wrong Wang → 88¢ fair). Also force-rescrub every Wang
-           still on a weak score so the next backfill can pick J. Wang correctly. */
+           (Thamchaiwat's wrong Wang → 88¢ fair). List must match COMMON_SURNAMES
+           in utr.js so scrub + matcher stay in lockstep. */
         or (
              utr_matched_name is not null
-             and lower(split_part(trim(name), ' ', -1))
-               in ('wang','li','lee','kim','chen','zhang','liu','yang','park','choi')
+             and lower(split_part(trim(name), ' ', -1)) = any($1::text[])
              and (
                coalesce(utr_match_score, 0) < 0.92
                or left(lower(split_part(trim(name), ' ', 1)), 1)
                     is distinct from left(lower(split_part(trim(utr_matched_name), ' ', 1)), 1)
              )
            )
-     returning competitor_id, name, utr_status, utr_match_score, utr_matched_name`);
+     returning competitor_id, name, utr_status, utr_match_score, utr_matched_name`,
+    [[...COMMON_SURNAMES]]);
   return { scrubbed: r.rowCount ?? 0, rows: r.rows.slice(0, 20) };
 }

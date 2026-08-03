@@ -229,11 +229,17 @@ export function estimateFill(asks, maxPriceDollars, desiredCents, participation)
     used += 1;
   }
 
-  const principalCents = Math.round(principal);
+  /* Kalshi only fills whole contracts — never size a fractional ticket. */
+  const wholeContracts = Math.floor(contracts);
+  if (wholeContracts < 1) return empty;
+  const averagePrice = highest > 0
+    ? (principal / 100) / contracts
+    : levels[0].price;
+  const principalCents = Math.round(wholeContracts * averagePrice * 100);
   return {
-    contracts,
+    contracts: wholeContracts,
     principalCents,
-    averagePrice: contracts > 0 ? (principalCents / 100) / contracts : 0,
+    averagePrice: wholeContracts > 0 ? (principalCents / 100) / wholeContracts : 0,
     highestPrice: highest,
     levels: used,
     availableCents,
@@ -472,13 +478,13 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
       { ...sizing, netEdge: finalEdge, roi: finalRoi, vwap: fill.averagePrice });
   }
 
-  let stakeCents = fill.principalCents;
-  let contracts = fill.contracts;
+  let contracts = Math.max(1, Math.floor(fill.contracts));
+  let stakeCents = Math.round(contracts * fill.averagePrice * 100);
   let limitNote = fill.principalCents < desired ? 'order-book liquidity' : limiting;
   if (booksProvisional) {
     const mult = Math.min(1, Math.max(0.1, cfg.crossMarketMissingStakeMult ?? 0.5));
-    stakeCents = Math.floor(stakeCents * mult);
     contracts = Math.max(0, Math.floor(contracts * mult));
+    stakeCents = Math.round(contracts * fill.averagePrice * 100);
     const why = opp.bookConsensus == null ? 'no books' : 'books not confirming';
     if (stakeCents < cfg.minimumBetCents || contracts < 1) {
       return reject(

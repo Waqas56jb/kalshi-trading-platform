@@ -89,13 +89,13 @@ const tokens = s => normaliseName(s).split(' ').filter(Boolean);
 
 /* Surnames that collide constantly on ITF (Max: Thamchaiwat vs the wrong Wang).
    Surname-only overlap must not clear the confidence bar — given name required. */
-const COMMON_SURNAMES = new Set([
+export const COMMON_SURNAMES = new Set([
   'wang', 'li', 'lee', 'kim', 'chen', 'zhang', 'liu', 'yang', 'huang', 'zhao',
   'wu', 'zhou', 'xu', 'sun', 'ma', 'zhu', 'hu', 'guo', 'he', 'lin', 'gao',
   'luo', 'zheng', 'liang', 'xie', 'song', 'tang', 'deng', 'han', 'cao', 'peng',
   'xiao', 'park', 'choi', 'jung', 'cho', 'kang', 'yoon', 'jang', 'lim', 'shin',
   'oh', 'seo', 'singh', 'kumar', 'patel', 'nguyen', 'tran', 'le', 'pham', 'hoang',
-  'vo', 'nguyen', 'smith', 'jones', 'brown', 'garcia', 'martin', 'lopez',
+  'vo', 'smith', 'jones', 'brown', 'garcia', 'martin', 'lopez',
 ]);
 
 /**

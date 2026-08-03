@@ -486,10 +486,11 @@ export function createApp() {
         autoPlace: cfg.shadowAutoPlace,
         bankroll: cfg.simulatedBankrollCents / 100,
         cashReservePct: Math.round(cfg.minimumFreeCashFraction * 100),
-        /* Live capped floor from summary — not the uncapped settings row. */
+        /* Min model fair (not min ask) — capped live value from summary. */
         minPriceCents: summary.floor?.live
           ?? Math.min(25, Math.max(15, cfg.minPriceCents)),
         floorRaw: summary.floor?.raw ?? null,
+        floorAppliesTo: 'fair',
         crossMarket: cfg.crossMarketEnabled,
         oddsFeed: oddsFeedConfigured(),
         deskSince: NEW_FORMULA_SINCE,

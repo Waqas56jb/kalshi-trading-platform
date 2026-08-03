@@ -42,9 +42,9 @@ export default function Shadow() {
           <Tag className="bg-panel border border-line">{mode.cashReservePct}% CASH RESERVE</Tag>
           <Tag
             className="bg-panel border border-line"
-            title="Hard buy floor (capped at 25¢). If this ever reads near 50¢ that is a bug — tell us."
+            title="Minimum model fair value (not min ask). Asks may be cheaper."
           >
-            PRICE FLOOR {mode.minPriceCents}¢
+            FAIR FLOOR {mode.minPriceCents}¢
           </Tag>
           <Tag className="bg-panel border border-line">
             BOOKS {mode.crossMarket && mode.oddsFeed ? 'CONFIRMING'
@@ -60,7 +60,7 @@ export default function Shadow() {
 
       <div className="mb-5 rounded-card border border-line2 bg-panel p-3.5 text-[12.5px] text-muted">
         Buys use the <span className="text-text">ask only</span> (bid / spread irrelevant, pre-match).
-        Price floor is capped at <span className="text-text">{mode?.minPriceCents ?? 25}¢</span> — never 50¢.
+        Floor is on <span className="text-text">model fair ≥ {mode?.minPriceCents ?? 25}¢</span> — not a minimum ask.
         Odds checker is a <span className="text-text">size upgrade</span>, not a wait.
         The 35–50¢ row below is reporting only.
       </div>

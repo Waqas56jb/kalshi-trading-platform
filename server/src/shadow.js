@@ -76,9 +76,7 @@ export async function loadRiskConfig() {
     minRoi: n(s.min_roi, 0.08),
     sub10MinRoi: n(s.sub10_min_roi, 0.20),
     absoluteMinProbability: n(s.absolute_min_probability, 0.05),
-    /* Placeholder. loadRiskConfig's caller overlays the derived floor, which is
-       measured from settled results rather than typed in. This value survives
-       only as a manual override. */
+    /* Minimum model fair (¢), not minimum ask. Derived overlay may adjust. */
     minPriceCents: n(s.min_price_cents, 25),
 
     crossMarketEnabled: s.cross_market_enabled === true,
@@ -254,12 +252,13 @@ async function shadowPortfolio(cfg) {
 export async function runShadowCycle(kalshi, { verbose = false } = {}) {
   const cfg = await loadRiskConfig();
 
-  /* The floor the data supports, not the one someone typed. Cap at 25¢ — a
-     derived 50¢ floor was rejecting 36¢ asks (Shadow hold list) and zeroing
-     early-round volume Max/Robbie expect. */
+  /* Fair-value floor (not min ask). Cap derived measure at 25¢ — a 50¢ figure
+     was zeroing volume when it was wrongly applied to the ask. */
   const limits = await derivedLimits().catch(() => ({}));
   if (limits.minimum_price?.value != null) {
     cfg.minPriceCents = Math.min(25, Math.max(15, Math.round(limits.minimum_price.value)));
+  } else {
+    cfg.minPriceCents = Math.min(25, Math.max(15, cfg.minPriceCents ?? 25));
   }
 
   /* Entries are pre-match only — the client's rule, and the model's too: the
@@ -298,11 +297,9 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
 
   if (!candidates.length) return { evaluated: 0, approved: 0, rejected: 0 };
 
-  /* Depth only for markets that could plausibly clear the price floor. Fetching
-     the whole board would be one request each per cycle for markets the engine
-     rejects on price before depth is ever consulted. */
+  /* Depth for tickets that clear the fair floor + raw edge. Ask may be cheap. */
   const worthFetching = candidates
-    .filter(c => c.yes_ask_cents >= cfg.minPriceCents
+    .filter(c => c.fair_cents >= cfg.minPriceCents
       && (c.fair_cents - c.market_cents) >= Math.round(cfg.minNetEdge * 100))
     .map(c => c.ticker);
   const worthSet = new Set(worthFetching);
@@ -695,7 +692,7 @@ async function recordDecisions(decisions, cfg) {
    Includes the Aug-4 wrong gates so the 488-hold day teaches the DB. */
 const LEARNING_CONSTRAINTS = [
   'cross-market data', 'cross-market edge', 'supporting books', 'consensus dispersion',
-  'no real market', 'price floor',
+  'no real market', 'price floor', 'fair floor',
 ];
 
 export async function settleShadowTrades() {
@@ -737,12 +734,12 @@ export async function settleShadowTrades() {
 export async function paperReplayWrongHolds({ hours = 72, stakeUsd = 20, limit = 500 } = {}) {
   await ensureShadowArchiveColumn();
   const cfg = await loadRiskConfig();
-  const floor = Math.min(25, Math.max(15, cfg.minPriceCents ?? 25));
+  const fairFloor = Math.min(25, Math.max(15, cfg.minPriceCents ?? 25));
 
   /* Permanent holds the new formula still rejects — never paper-force these. */
   const permanent = [
     'utr not rated', 'match in play', 'verify name (Δ≥2)', 'market disagrees',
-    'system health', 'probability floor',
+    'system health', 'probability floor', 'fair floor',
   ];
 
   const { rows } = await query(
@@ -762,7 +759,8 @@ export async function paperReplayWrongHolds({ hours = 72, stakeUsd = 20, limit =
        and st.approved = false
        and st.result is null
        and st.created_at > now() - ($1 || ' hours')::interval
-       and st.best_ask_cents between $2 and 85
+       and st.best_ask_cents between 12 and 85
+       and coalesce(s.fair_cents, round(st.model_probability * 100)) >= $2
        and coalesce(s.fair_cents, round(st.model_probability * 100))
              >= st.best_ask_cents + 3
        and coalesce(st.limiting_constraint, '') <> all($3::text[])
@@ -781,7 +779,7 @@ export async function paperReplayWrongHolds({ hours = 72, stakeUsd = 20, limit =
            )
      order by st.created_at desc
      limit $4`,
-    [String(hours), floor, permanent, limit],
+    [String(hours), fairFloor, permanent, limit],
   );
 
   let replayed = 0;
@@ -878,7 +876,7 @@ export async function paperReplayWrongHolds({ hours = 72, stakeUsd = 20, limit =
     replayed += 1;
   }
 
-  return { considered: rows.length, replayed, skipped, stakeUsd, hours, floor };
+  return { considered: rows.length, replayed, skipped, stakeUsd, hours, fairFloor };
 }
 
 /* When the odds feed went live and book data started being recorded. Rows
@@ -1052,15 +1050,15 @@ export async function shadowSummary() {
       || /spread/i.test(r.limiting_constraint || ''))
     .reduce((n, r) => n + Number(r.n), 0);
   const floorHolds = reasons.rows
-    .filter(r => /price floor/i.test(r.limiting_constraint || '')
-      || /below the .*floor/i.test(r.rejection_reason || ''))
+    .filter(r => /fair floor|price floor/i.test(r.limiting_constraint || '')
+      || /fair-value floor|below the .*floor/i.test(r.rejection_reason || ''))
     .reduce((n, r) => n + Number(r.n), 0);
   const monitors = [];
   if (rawFloor != null && rawFloor > 25) {
     monitors.push({
       id: 'floor_uncapped',
       severity: 'error',
-      message: `Derived floor tried ${rawFloor}¢ (live capped at ${liveFloor}¢) — investigate deriveMinimumPrice.`,
+      message: `Derived fair floor tried ${rawFloor}¢ (live capped at ${liveFloor}¢).`,
     });
   }
   if (spreadHolds > 0) {
@@ -1074,7 +1072,7 @@ export async function shadowSummary() {
     monitors.push({
       id: 'floor_holds',
       severity: 'warn',
-      message: `${floorHolds} price-floor hold(s) in last 12h at live floor ${liveFloor}¢.`,
+      message: `${floorHolds} fair-floor hold(s) in last 12h (min model fair ${liveFloor}¢).`,
     });
   }
 
@@ -1120,7 +1118,7 @@ export async function shadowSummary() {
       return +((dogs / total) * 100).toFixed(1);
     })(),
     monitors,
-    floor: { raw: rawFloor, live: liveFloor, cappedAt: 25 },
+    floor: { raw: rawFloor, live: liveFloor, cappedAt: 25, appliesTo: 'fair' },
   };
 }
 

@@ -317,13 +317,13 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
   const bestAsk = Math.min(...asks.filter(l => l.contracts > 0).map(l => l.price));
   if (!Number.isFinite(bestAsk)) return reject('No executable ask liquidity.', 'order book', base);
 
-  /* The price floor. Every backtest we have run puts the losses below roughly
-     10c: at a 6c average the model won 2.4% of the time against a 6% breakeven.
-     This is the single most load-bearing filter in the engine. */
-  if (Math.round(bestAsk * 100) < cfg.minPriceCents) {
+  /* Fair-value floor (Max): require model fair ≥ 25¢ — not a minimum ask.
+     Cheap asks against a real favourite are fine; longshot fairs are not. */
+  const fairCents = Math.round((opp.modelProbability ?? 0) * 100);
+  if (fairCents < cfg.minPriceCents) {
     return reject(
-      `Best ask ${Math.round(bestAsk * 100)}c is below the ${cfg.minPriceCents}c floor.`,
-      'price floor', { ...base, bestAsk });
+      `Model fair ${fairCents}c is below the ${cfg.minPriceCents}c fair-value floor.`,
+      'fair floor', { ...base, bestAsk, fairCents });
   }
 
   if (Math.abs(bestAsk - opp.priceAtModelTime) > cfg.maxPriceMove) {

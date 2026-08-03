@@ -360,9 +360,9 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
       'minimum ROI', withEv);
   }
 
-  /* Cross-market confirmation. When books are present they must agree. When
-     they are absent (common on early ITF), optionally continue at a reduced
-     stake so early-round volume is not zero — full size only with consensus. */
+  /* Cross-market is a size upgrade, not a wait gate. ITF lines often appear
+     only when Kalshi's edge is gone — so missing/flat/disagreeing books all
+     fall through to reduced stake. Full stake only when books clearly confirm. */
   let crossEdge = null;
   let booksProvisional = false;
   if (cfg.crossMarketEnabled) {
@@ -382,21 +382,12 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
       booksProvisional = true;
     } else {
       crossEdge = opp.bookConsensus - effectivePrice;
-      if (crossEdge < cfg.crossMarketMinEdge) {
-        return reject(
-          `Books do not confirm: consensus edge ${(crossEdge * 100).toFixed(1)}pp `
-          + `below the required ${(cfg.crossMarketMinEdge * 100).toFixed(0)}pp.`,
-          'cross-market edge', { ...withEv, crossEdge });
-      }
-      if ((opp.supportingBooks ?? 0) < cfg.crossMarketMinBooks) {
-        return reject(
-          `Only ${opp.supportingBooks ?? 0} book(s) support the direction, `
-          + `${cfg.crossMarketMinBooks} required.`,
-          'supporting books', { ...withEv, crossEdge });
-      }
-      if ((opp.consensusRange ?? 0) > cfg.crossMarketMaxSpread) {
-        return reject('Books disagree too widely to be treated as a consensus.',
-          'consensus dispersion', { ...withEv, crossEdge });
+      const booksOk = crossEdge >= cfg.crossMarketMinEdge
+        && (opp.supportingBooks ?? 0) >= cfg.crossMarketMinBooks
+        && (opp.consensusRange ?? 0) <= cfg.crossMarketMaxSpread;
+      if (!booksOk) {
+        /* Do not wait / hard-reject — place smaller now while Kalshi still misprices. */
+        booksProvisional = true;
       }
     }
   }
@@ -488,14 +479,15 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
     const mult = Math.min(1, Math.max(0.1, cfg.crossMarketMissingStakeMult ?? 0.5));
     stakeCents = Math.floor(stakeCents * mult);
     contracts = Math.max(0, Math.floor(contracts * mult));
+    const why = opp.bookConsensus == null ? 'no books' : 'books not confirming';
     if (stakeCents < cfg.minimumBetCents || contracts < 1) {
       return reject(
-        `Provisional (no books) stake after ${Math.round(mult * 100)}% cut `
+        `Provisional (${why}) stake after ${Math.round(mult * 100)}% cut `
         + `is below the minimum order.`,
         'provisional stake',
         { ...sizing, netEdge: finalEdge, roi: finalRoi, vwap: fill.averagePrice, booksProvisional });
     }
-    limitNote = `provisional (no books · ${Math.round(mult * 100)}% stake)`
+    limitNote = `provisional (${why} · ${Math.round(mult * 100)}% stake)`
       + (limitNote ? ` · ${limitNote}` : '');
   }
 

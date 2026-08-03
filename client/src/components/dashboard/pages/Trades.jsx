@@ -81,7 +81,9 @@ export default function Trades({ user }) {
     <div className="animate-page-in">
       <PageHead
         title="Trade history"
-        sub="Fills and settlements only — engine holds/scans for upcoming matches live on Shadow"
+        sub={data?.deskSince
+          ? `Desk ledger since ${new Date(data.deskSince).toLocaleString()} — earlier Lost/Won archived out of this view`
+          : 'Fills and settlements only — earlier era archived out of this view'}
         action={
           <div className="flex gap-2 items-center flex-wrap max-sm:w-full">
             {FILTERS.map(([id, label]) => (

@@ -689,7 +689,8 @@ const ODDS_FEED_LIVE_SINCE = '2026-08-02T13:00:00Z';
  * archived out of the Shadow headline numbers (the old 6 and earlier paper).
  * Held-back diagnostics stay visible.
  */
-export const NEW_FORMULA_SINCE = '2026-08-03T19:00:00Z';
+/* Desk scoreboard starts Aug 4 UTC — wipes Aug 3 and earlier Lost/Won from the UI. */
+export const NEW_FORMULA_SINCE = '2026-08-04T00:00:00Z';
 
 /** Ensures archive column exists (prod may not have run the SQL migration yet). */
 async function ensureShadowArchiveColumn() {
@@ -699,8 +700,9 @@ async function ensureShadowArchiveColumn() {
 }
 
 /**
- * Archives pre-new-formula placed shadow bets and matching paper ledger fills
- * so desk P&L starts clean. Idempotent.
+ * Archives pre-new-formula shadow placements and ALL ledger fills from before
+ * the era (paper or live) so Trade history Lost/Won and desk P&L restart clean.
+ * Idempotent.
  */
 export async function archivePreNewFormulaDesk() {
   await ensureShadowArchiveColumn();
@@ -711,28 +713,16 @@ export async function archivePreNewFormulaDesk() {
        and created_at < $1::timestamptz
      returning ticker`,
     [NEW_FORMULA_SINCE]);
-  const tickers = shadow.rows.map(r => r.ticker);
-  let trades = { rowCount: 0 };
-  if (tickers.length) {
-    trades = await query(
-      `update ${t('trades')} set archived_at = now()
-       where archived_at is null
-         and mode = 'paper'
-         and ticker = any($1::text[])
-       returning id`,
-      [tickers]);
-  }
-  /* Any other paper fills from before the era (auto-place without shadow row). */
-  const orphanPaper = await query(
+  /* Any mode — Max still saw Lost because live/imported rows were skipped. */
+  const trades = await query(
     `update ${t('trades')} set archived_at = now()
      where archived_at is null
-       and mode = 'paper'
        and placed_at < $1::timestamptz
      returning id`,
     [NEW_FORMULA_SINCE]);
   return {
     shadowArchived: shadow.rowCount ?? 0,
-    tradesArchived: (trades.rowCount ?? 0) + (orphanPaper.rowCount ?? 0),
+    tradesArchived: trades.rowCount ?? 0,
     since: NEW_FORMULA_SINCE,
   };
 }

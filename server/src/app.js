@@ -437,10 +437,13 @@ export function createApp() {
   }));
 
   api.get('/trades', requireAuth, h(async (req, res) => {
-    /* Book any fills whose market already has yes/no locally — stops finished
-       matches sitting on Sell early with blank P&L until someone hits Settle. */
+    /* Clear pre-era Lost/Won from the desk view, then book any local settlements. */
+    await archivePreNewFormulaDesk().catch(() => null);
     await repo.settleResolvedTrades(null, { localOnly: true }).catch(() => null);
-    res.json({ trades: await repo.listTrades({ filter: String(req.query.filter ?? 'all') }) });
+    res.json({
+      trades: await repo.listTrades({ filter: String(req.query.filter ?? 'all') }),
+      deskSince: NEW_FORMULA_SINCE,
+    });
   }));
 
   /* -------------------------------------------------------------- dashboard */

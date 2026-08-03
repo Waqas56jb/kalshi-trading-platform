@@ -29,9 +29,14 @@ export const MIN_REAL_BID_CENTS = 2;
 /**
  * Classifies one side of a match, given the opponent's ask where we have it.
  *
- * Returns `{ tradable, reason, spread, overround }`. `tradable: false` never
- * means "a bad price" — it means there is no price, and the caller must not
- * compute an edge against it.
+ * Returns `{ tradable, reason, spread, overround, oneSided? }`. `tradable: false`
+ * never means "a bad price" — it means there is no price, and the caller must
+ * not compute an edge against it.
+ *
+ * Exception (Aug 2026): ITF often shows a real cheap ask (e.g. Kamendje 35¢)
+ * while the favourite side sits on a 90–95¢ placeholder. Failing the whole
+ * match as "book_is_empty" then blocked the only tradable edge. A mid-range
+ * ask with a sane spread on *this* side is allowed one-sided.
  */
 export function assessQuote({ bid, ask, opponentAsk = null }) {
   if (ask == null) return { tradable: false, reason: 'no_ask', spread: null, overround: null };
@@ -39,21 +44,35 @@ export function assessQuote({ bid, ask, opponentAsk = null }) {
   const spread = bid == null ? null : ask - bid;
   const overround = opponentAsk == null ? null : ask + opponentAsk - 100;
 
-  /* The two-sided test first, because it is the one that cannot be argued with:
-     both players cannot be 95% to win the same match. */
-  if (overround != null && Math.abs(overround) > MAX_OVERROUND_CENTS) {
-    return { tradable: false, reason: 'book_is_empty', spread, overround };
-  }
-  if (spread != null && spread > MAX_REAL_SPREAD_CENTS) {
-    return { tradable: false, reason: 'spread_not_a_market', spread, overround };
-  }
-  if (bid != null && bid <= MIN_REAL_BID_CENTS && ask >= 90) {
-    return { tradable: false, reason: 'placeholder_quote', spread, overround };
-  }
   if (ask <= 0 || ask >= 100) {
     return { tradable: false, reason: 'degenerate_price', spread, overround };
   }
-  return { tradable: true, reason: null, spread, overround };
+  /* Favourite-side placeholders — never trade these as if they were 90%+. */
+  if (bid != null && bid <= MIN_REAL_BID_CENTS && ask >= 90) {
+    return { tradable: false, reason: 'placeholder_quote', spread, overround };
+  }
+  if (spread != null && spread > MAX_REAL_SPREAD_CENTS && ask >= 80) {
+    return { tradable: false, reason: 'spread_not_a_market', spread, overround };
+  }
+
+  const thisSideLooksLive = ask >= 12 && ask <= 78
+    && (spread == null || spread <= MAX_REAL_SPREAD_CENTS);
+
+  /* Two-sided nonsense — unless this ask itself looks like a real resting offer. */
+  if (overround != null && Math.abs(overround) > MAX_OVERROUND_CENTS) {
+    if (thisSideLooksLive) {
+      return { tradable: true, reason: null, spread, overround, oneSided: true };
+    }
+    return { tradable: false, reason: 'book_is_empty', spread, overround };
+  }
+  if (spread != null && spread > MAX_REAL_SPREAD_CENTS) {
+    if (thisSideLooksLive && ask <= 60) {
+      return { tradable: true, reason: null, spread, overround, oneSided: true };
+    }
+    return { tradable: false, reason: 'spread_not_a_market', spread, overround };
+  }
+
+  return { tradable: true, reason: null, spread, overround, oneSided: false };
 }
 
 /**
@@ -70,6 +89,12 @@ export function marketProbability({ bid, ask, opponentBid = null, opponentAsk = 
   if (!assessment.tradable) return { probability: null, ...assessment };
 
   const mid = bid != null ? (bid + ask) / 2 : ask;
+  /* One-sided: opponent is a placeholder — anchor on this ask only so a real
+     35¢ offer is not dragged toward a fake 95¢ favourite quote. */
+  if (assessment.oneSided) {
+    return { probability: mid / 100, ...assessment };
+  }
+
   const oppMid = opponentBid != null && opponentAsk != null
     ? (opponentBid + opponentAsk) / 2
     : opponentAsk;

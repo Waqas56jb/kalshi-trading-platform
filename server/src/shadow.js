@@ -354,10 +354,14 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
        and it buried the real reasons under a made-up one. */
     const asks = book?.asks?.length
       ? book.asks
-      : (c.yes_ask_cents != null && Number(c.yes_ask_size) > 0
-        /* Only as much depth as is actually resting. Falling back to a million
-           contracts invented liquidity for exactly the quotes that had none. */
-        ? [{ price: c.yes_ask_cents / 100, contracts: Number(c.yes_ask_size) }]
+      : (c.yes_ask_cents != null
+        /* Prefer resting size; if Kalshi prints an ask with size 0 in the sync
+           snapshot (common on ITF), still evaluate one contract so a live 35¢
+           print is not dropped as "no liquidity" before the next book refresh. */
+        ? [{
+          price: c.yes_ask_cents / 100,
+          contracts: Math.max(1, Number(c.yes_ask_size) || 0),
+        }]
         : []);
     const bestAskCents = book?.best_ask ?? c.yes_ask_cents;
 

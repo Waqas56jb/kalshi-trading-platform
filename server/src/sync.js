@@ -4,7 +4,7 @@ import { snapshotPortfolio, autoSellAtFair } from './orders.js';
 import { importKalshiHistory } from './importer.js';
 import { backfillRatings, scrubUnusableRatings } from './ratings.js';
 import { syncSettlements } from './settlements.js';
-import { runShadowCycle, settleShadowTrades } from './shadow.js';
+import { runShadowCycle, settleShadowTrades, archivePreNewFormulaDesk } from './shadow.js';
 import { settleResolvedTrades, tagOversizedAlertPathFills } from './repo.js';
 import {
   recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope, deriveMinimumPrice,
@@ -488,6 +488,20 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        (wrong Kuznetsova / low Dreycopp-style junk left from older matching). */
     await scrubUnusableRatings().catch(() => null);
     await backfillRatings({ limit: 40, delayMs: 120 }).catch(() => null);
+
+    /* Zero pre-new-formula placed P&L (old 6) and apply looser volume settings. */
+    await archivePreNewFormulaDesk().catch(() => null);
+    await query(
+      `update ${t('settings')} set
+         cross_market_min_edge = least(coalesce(cross_market_min_edge, 0.03), 0.015),
+         cross_market_min_books = least(coalesce(cross_market_min_books, 2), 1),
+         min_net_edge = least(coalesce(min_net_edge, 0.04), 0.03),
+         min_roi = least(coalesce(min_roi, 0.10), 0.08),
+         sub10_min_roi = least(coalesce(sub10_min_roi, 0.30), 0.20),
+         max_signal_age_seconds = greatest(coalesce(max_signal_age_seconds, 60), 120),
+         max_snapshot_age_seconds = greatest(coalesce(max_snapshot_age_seconds, 120), 180),
+         updated_at = now()
+       where id = 1`).catch(() => null);
 
     const out = await tx(async client => {
       await upsertPlayers(client, rows);

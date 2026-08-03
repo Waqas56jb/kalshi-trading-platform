@@ -9,7 +9,10 @@ import {
   COLUMNS, FEATURE_COLUMNS, TARGET_COLUMN, RANGE_NAMES, BREAKDOWN_COLUMNS,
 } from './dataset.js';
 import { toCsv, toXlsx } from './xlsx.js';
-import { runShadowCycle, shadowSummary, loadRiskConfig, gateComparison } from './shadow.js';
+import {
+  runShadowCycle, shadowSummary, loadRiskConfig, gateComparison,
+  archivePreNewFormulaDesk, NEW_FORMULA_SINCE,
+} from './shadow.js';
 import { recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope } from './calibration.js';
 import { simulateFormulas } from './simulator.js';
 import { oddsFeedConfigured } from './oddsfeed.js';
@@ -471,6 +474,7 @@ export function createApp() {
 
   /** Simulated performance, plus the per-bracket breakdown the client asked for. */
   api.get('/shadow/summary', requireAuth, h(async (_req, res) => {
+    await archivePreNewFormulaDesk().catch(() => null);
     const [summary, cfg] = await Promise.all([shadowSummary(), loadRiskConfig()]);
     res.json({
       summary,
@@ -482,6 +486,7 @@ export function createApp() {
         minPriceCents: cfg.minPriceCents,
         crossMarket: cfg.crossMarketEnabled,
         oddsFeed: oddsFeedConfigured(),
+        deskSince: NEW_FORMULA_SINCE,
       },
     });
   }));
@@ -494,10 +499,11 @@ export function createApp() {
    * costing 68 signals a day.
    */
   api.get('/shadow/decisions', requireAuth, h(async (req, res) => {
+    await archivePreNewFormulaDesk().catch(() => null);
     const approved = req.query.approved;
     const limit = Math.min(300, Number(req.query.limit) || 100);
-    const filter = approved === 'true' ? 'where approved'
-      : approved === 'false' ? 'where not approved' : '';
+    const filter = approved === 'true' ? 'and approved'
+      : approved === 'false' ? 'and not approved' : '';
     /* Newest first — ranking by edge buried today's engine activity under older
        high-edge rows, which made the desk look 24h out of date. */
     const r = await query(
@@ -508,10 +514,11 @@ export function createApp() {
               base_cap_fraction, edge_scaling_mult, effective_cap, throttle_multiplier,
               stake_usd, contracts, limiting_constraint, rejection_reason,
               result, pnl_usd, match_date, created_at
-       from ${t('shadow_trades')} ${filter}
+       from ${t('shadow_trades')}
+       where archived_at is null ${filter}
        order by created_at desc
        limit $1`, [limit]);
-    res.json({ decisions: r.rows });
+    res.json({ decisions: r.rows, deskSince: NEW_FORMULA_SINCE });
   }));
 
   api.post('/shadow/run', requireAuth, h(async (_req, res) => {

@@ -68,10 +68,10 @@ export async function loadRiskConfig() {
     capSignalExposure: n(s.cap_signal_exposure, 0.03),
     capUnsettledExposure: n(s.cap_unsettled_exposure, 0.08),
 
-    minNetEdge: n(s.min_net_edge, 0.04),
-    sub10MinNetEdge: n(s.sub10_min_net_edge, 0.05),
-    minRoi: n(s.min_roi, 0.10),
-    sub10MinRoi: n(s.sub10_min_roi, 0.30),
+    minNetEdge: n(s.min_net_edge, 0.03),
+    sub10MinNetEdge: n(s.sub10_min_net_edge, 0.04),
+    minRoi: n(s.min_roi, 0.08),
+    sub10MinRoi: n(s.sub10_min_roi, 0.20),
     absoluteMinProbability: n(s.absolute_min_probability, 0.05),
     /* Placeholder. loadRiskConfig's caller overlays the derived floor, which is
        measured from settled results rather than typed in. This value survives
@@ -79,18 +79,19 @@ export async function loadRiskConfig() {
     minPriceCents: n(s.min_price_cents, 25),
 
     crossMarketEnabled: s.cross_market_enabled === true,
-    crossMarketMinEdge: n(s.cross_market_min_edge, 0.03),
-    crossMarketMinBooks: n(s.cross_market_min_books, 2),
-    crossMarketMaxSpread: n(s.cross_market_max_spread, 0.10),
+    /* Was 3pp / 2 books — too strict for ITF early rounds. */
+    crossMarketMinEdge: n(s.cross_market_min_edge, 0.015),
+    crossMarketMinBooks: n(s.cross_market_min_books, 1),
+    crossMarketMaxSpread: n(s.cross_market_max_spread, 0.12),
     /* ITF often has no line until near first serve. Allow a reduced stake so
        early-round volume is not zero; full size only when books confirm. */
     crossMarketAllowMissing: s.cross_market_allow_missing !== false,
-    crossMarketMissingStakeMult: n(s.cross_market_missing_stake_mult, 0.5),
+    crossMarketMissingStakeMult: n(s.cross_market_missing_stake_mult, 0.65),
 
-    maxBookParticipation: n(s.max_book_participation, 0.10),
-    maxSignalAgeSeconds: n(s.max_signal_age_seconds, 60),
-    maxSnapshotAgeSeconds: n(s.max_snapshot_age_seconds, 120),
-    maxPriceMove: n(s.max_price_move, 0.02),
+    maxBookParticipation: n(s.max_book_participation, 0.12),
+    maxSignalAgeSeconds: n(s.max_signal_age_seconds, 120),
+    maxSnapshotAgeSeconds: n(s.max_snapshot_age_seconds, 180),
+    maxPriceMove: n(s.max_price_move, 0.03),
     expectedSlippage: n(s.expected_slippage, 0.003),
 
     throttle1At: n(s.throttle_1_at, 0.01),
@@ -187,12 +188,14 @@ export async function refreshOrderBooks(kalshi, tickers, { depth = 10, concurren
 
 /** Simulated portfolio: fixed bankroll, cash reduced by open shadow exposure. */
 async function shadowPortfolio(cfg) {
+  await ensureShadowArchiveColumn();
   const r = await query(
     `select
        coalesce(sum(stake_usd) filter (where approved and result is null), 0)::numeric as open_stake,
        coalesce(sum(pnl_usd)   filter (where settled_at::date = (now() at time zone 'America/Los_Angeles')::date), 0)::numeric as today_pnl,
        coalesce(sum(pnl_usd), 0)::numeric as lifetime_pnl
-     from ${t('shadow_trades')}`);
+     from ${t('shadow_trades')}
+     where archived_at is null`);
   const row = r.rows[0];
 
   const openCents = Math.round(Number(row.open_stake) * 100);
@@ -203,7 +206,8 @@ async function shadowPortfolio(cfg) {
   const exposure = { match: {}, player: {}, playerDaily: {}, bucket: {}, signal: {} };
   const open = await query(
     `select event_ticker, player_name, utr_bracket, stake_usd, ticker
-     from ${t('shadow_trades')} where approved and result is null`);
+     from ${t('shadow_trades')}
+     where archived_at is null and approved and result is null`);
   const heldTickers = new Set(open.rows.map(r => r.ticker));
   for (const p of open.rows) {
     const cents = Math.round(Number(p.stake_usd) * 100);
@@ -212,7 +216,8 @@ async function shadowPortfolio(cfg) {
   }
   const daily = await query(
     `select player_name, sum(stake_usd)::numeric total from ${t('shadow_trades')}
-     where approved and created_at::date = (now() at time zone 'America/Los_Angeles')::date
+     where archived_at is null and approved
+       and created_at::date = (now() at time zone 'America/Los_Angeles')::date
      group by player_name`);
   for (const p of daily.rows) {
     exposure.playerDaily[p.player_name] = Math.round(Number(p.total) * 100);
@@ -313,7 +318,7 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
      cycle. Both caches inside the feed make the budget a worst case, not a
      steady state. */
   const useOddsFeed = cfg.crossMarketEnabled && oddsFeedConfigured();
-  let oddsBudget = 60;
+  let oddsBudget = 80;
 
   const decisions = [];
   for (const c of candidates) {
@@ -651,6 +656,7 @@ const CROSS_MARKET_CONSTRAINTS = [
 ];
 
 export async function settleShadowTrades() {
+  await ensureShadowArchiveColumn();
   const r = await query(
     `update ${t('shadow_trades')} st set
        result = case when m.result = 'yes' then 'won' else 'lost' end,
@@ -665,6 +671,7 @@ export async function settleShadowTrades() {
        settled_at = coalesce(m.settled_at, now())
      from ${t('markets')} m
      where m.ticker = st.ticker
+       and st.archived_at is null
        and (st.approved or st.limiting_constraint = any($1))
        and st.result is null
        and m.result in ('yes','no')`,
@@ -676,6 +683,59 @@ export async function settleShadowTrades() {
    before this are from an era with no book information and would poison the
    comparison. */
 const ODDS_FEED_LIVE_SINCE = '2026-08-02T13:00:00Z';
+
+/**
+ * Desk P&L / Placed / Settled restart. Everything approved before this is
+ * archived out of the Shadow headline numbers (the old 6 and earlier paper).
+ * Held-back diagnostics stay visible.
+ */
+export const NEW_FORMULA_SINCE = '2026-08-03T19:00:00Z';
+
+/** Ensures archive column exists (prod may not have run the SQL migration yet). */
+async function ensureShadowArchiveColumn() {
+  await query(
+    `alter table ${t('shadow_trades')}
+       add column if not exists archived_at timestamptz`).catch(() => null);
+}
+
+/**
+ * Archives pre-new-formula placed shadow bets and matching paper ledger fills
+ * so desk P&L starts clean. Idempotent.
+ */
+export async function archivePreNewFormulaDesk() {
+  await ensureShadowArchiveColumn();
+  const shadow = await query(
+    `update ${t('shadow_trades')} set archived_at = now()
+     where archived_at is null
+       and approved
+       and created_at < $1::timestamptz
+     returning ticker`,
+    [NEW_FORMULA_SINCE]);
+  const tickers = shadow.rows.map(r => r.ticker);
+  let trades = { rowCount: 0 };
+  if (tickers.length) {
+    trades = await query(
+      `update ${t('trades')} set archived_at = now()
+       where archived_at is null
+         and mode = 'paper'
+         and ticker = any($1::text[])
+       returning id`,
+      [tickers]);
+  }
+  /* Any other paper fills from before the era (auto-place without shadow row). */
+  const orphanPaper = await query(
+    `update ${t('trades')} set archived_at = now()
+     where archived_at is null
+       and mode = 'paper'
+       and placed_at < $1::timestamptz
+     returning id`,
+    [NEW_FORMULA_SINCE]);
+  return {
+    shadowArchived: shadow.rowCount ?? 0,
+    tradesArchived: (trades.rowCount ?? 0) + (orphanPaper.rowCount ?? 0),
+    since: NEW_FORMULA_SINCE,
+  };
+}
 
 /**
  * The comparison the client asked for on 2 Aug 2026: bets confirmed against
@@ -737,6 +797,7 @@ export async function gateComparison({ stakeUsd = 100 } = {}) {
 
 /** Headline shadow performance, and the per-bracket breakdown the client asked for. */
 export async function shadowSummary() {
+  await ensureShadowArchiveColumn();
   const [overall, brackets, reasons, priceBands] = await Promise.all([
     query(`select
         count(*) filter (where approved)::int placed,
@@ -745,19 +806,21 @@ export async function shadowSummary() {
         -- gate-rejected rows also carry results now; only real positions count here
         count(*) filter (where approved and result = 'won')::int won,
         coalesce(sum(stake_usd) filter (where approved), 0)::numeric staked,
-        coalesce(sum(pnl_usd), 0)::numeric pnl,
+        coalesce(sum(pnl_usd) filter (where approved), 0)::numeric pnl,
         coalesce(sum(stake_usd) filter (where approved and result is null), 0)::numeric at_risk
-      from ${t('shadow_trades')}`),
+      from ${t('shadow_trades')}
+      where archived_at is null`),
     query(`select utr_bracket,
         count(*) filter (where approved)::int placed,
         count(*) filter (where approved and result is not null)::int settled,
         count(*) filter (where approved and result = 'won')::int won,
         coalesce(sum(stake_usd) filter (where approved), 0)::numeric staked,
-        coalesce(sum(pnl_usd), 0)::numeric pnl
-      from ${t('shadow_trades')} where utr_bracket is not null
+        coalesce(sum(pnl_usd) filter (where approved), 0)::numeric pnl
+      from ${t('shadow_trades')}
+      where archived_at is null and utr_bracket is not null
       group by 1 order by 1`),
     query(`select rejection_reason, limiting_constraint, count(*)::int n
-      from ${t('shadow_trades')} where not approved
+      from ${t('shadow_trades')} where archived_at is null and not approved
       group by 1, 2 order by n desc limit 12`),
     /* The tilt audit: where the engine's entries actually sit on the price
        ladder. The standing worry is that the model leans on underdogs, and the
@@ -774,7 +837,8 @@ export async function shadowSummary() {
         count(*) filter (where result = 'won')::int won,
         coalesce(sum(stake_usd), 0)::numeric staked,
         coalesce(sum(pnl_usd), 0)::numeric pnl
-      from ${t('shadow_trades')} where approved and best_ask_cents is not null
+      from ${t('shadow_trades')}
+      where archived_at is null and approved and best_ask_cents is not null
       group by 1 order by 2`),
   ]);
 

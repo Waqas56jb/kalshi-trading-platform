@@ -50,6 +50,11 @@ export default function Shadow() {
             BOOKS {mode.crossMarket && mode.oddsFeed ? 'CONFIRMING'
               : mode.oddsFeed ? 'CONNECTED — GATE OFF' : 'NOT CONNECTED'}
           </Tag>
+          {mode.deskSince && (
+            <Tag className="bg-panel border border-line" title="Pre-era placed bets archived out of P&L">
+              DESK SINCE {new Date(mode.deskSince).toLocaleDateString()}
+            </Tag>
+          )}
         </div>
       )}
 

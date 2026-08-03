@@ -243,8 +243,6 @@ async function computeSignals(client, rows, settings) {
 
   const minEv = Number(settings.min_ev_threshold);
   const minGap = Number(settings.min_utr_gap);
-  const minBid = Number(settings.min_bid_cents ?? 5);
-  const maxSpread = Number(settings.max_spread_cents ?? 12);
   const maxEdge = Number(settings.max_edge_cents ?? 25);
   const minEdge = Number(settings.min_edge_cents ?? 15);
   const leadMs = Number(settings.alert_lead_minutes ?? 10) * 60_000;
@@ -292,8 +290,7 @@ async function computeSignals(client, rows, settings) {
     if (edge < minEdge) return 'edge_too_small';
     if (s.ev_pct == null || s.ev_pct < minEv) return 'below_ev_threshold';
     if (Math.abs(s.utr_gap ?? 0) < minGap) return 'utr_gap_too_small';
-    if (bid == null || bid < minBid) return 'no_real_bid';
-    if (ask != null && bid != null && ask - bid > maxSpread) return 'spread_too_wide';
+    /* Bid / spread irrelevant for buys — ask only (Max). */
     if (edge > maxEdge) return 'market_disagrees_strongly';
 
     /* Pre-match window. The model prices form on paper, not what is happening on

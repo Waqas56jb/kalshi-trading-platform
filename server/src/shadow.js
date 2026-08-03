@@ -4,7 +4,7 @@ import { looksInPlay } from './model.js';
 import { evaluateBet, kalshiFeeRate, probabilityBucket, utrBracket } from './risk.js';
 import { calibrationMap, derivedLimits } from './calibration.js';
 import { bookConsensus } from './crossmarket.js';
-import { assessQuote, marketProbability, QUOTE_REASONS } from './quote.js';
+import { marketProbability, QUOTE_REASONS } from './quote.js';
 import { autoPlaceApproved } from './orders.js';
 import { oddsFeedConfigured, quotesForMatch } from './oddsfeed.js';
 
@@ -845,6 +845,44 @@ export async function shadowSummary() {
   const o = overall.rows[0];
   const staked = Number(o.staked);
   const pnl = Number(o.pnl);
+
+  /* Desk bug monitors — surface on Shadow so a 50¢ floor / spread hold can't
+     hide again after Robbie/Max called them out. */
+  const limits = await derivedLimits().catch(() => ({}));
+  const rawFloor = limits.minimum_price?.value != null
+    ? Math.round(Number(limits.minimum_price.value)) : null;
+  const liveFloor = rawFloor != null ? Math.min(25, Math.max(15, rawFloor)) : 25;
+  const spreadHolds = reasons.rows
+    .filter(r => /spread/i.test(r.rejection_reason || '')
+      || /spread/i.test(r.limiting_constraint || ''))
+    .reduce((n, r) => n + Number(r.n), 0);
+  const floorHolds = reasons.rows
+    .filter(r => /price floor/i.test(r.limiting_constraint || '')
+      || /below the .*floor/i.test(r.rejection_reason || ''))
+    .reduce((n, r) => n + Number(r.n), 0);
+  const monitors = [];
+  if (rawFloor != null && rawFloor > 25) {
+    monitors.push({
+      id: 'floor_uncapped',
+      severity: 'error',
+      message: `Derived floor tried ${rawFloor}¢ (live capped at ${liveFloor}¢) — investigate deriveMinimumPrice.`,
+    });
+  }
+  if (spreadHolds > 0) {
+    monitors.push({
+      id: 'spread_holds',
+      severity: 'error',
+      message: `${spreadHolds} hold(s) in last 12h still cite spread — buy path should be ask-only.`,
+    });
+  }
+  if (floorHolds > 0 && liveFloor >= 25) {
+    monitors.push({
+      id: 'floor_holds',
+      severity: 'warn',
+      message: `${floorHolds} price-floor hold(s) in last 12h at live floor ${liveFloor}¢.`,
+    });
+  }
+
   return {
     placed: o.placed,
     heldBack: o.held_back,
@@ -886,6 +924,8 @@ export async function shadowSummary() {
         .reduce((s, b) => s + Number(b.staked), 0);
       return +((dogs / total) * 100).toFixed(1);
     })(),
+    monitors,
+    floor: { raw: rawFloor, live: liveFloor, cappedAt: 25 },
   };
 }
 

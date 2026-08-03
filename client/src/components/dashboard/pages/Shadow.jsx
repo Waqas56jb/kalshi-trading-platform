@@ -59,11 +59,27 @@ export default function Shadow() {
       )}
 
       <div className="mb-5 rounded-card border border-line2 bg-panel p-3.5 text-[12.5px] text-muted">
-        Buys use the <span className="text-text">ask only</span> (bid irrelevant, pre-match).
+        Buys use the <span className="text-text">ask only</span> (bid / spread irrelevant, pre-match).
         Price floor is capped at <span className="text-text">{mode?.minPriceCents ?? 25}¢</span> — never 50¢.
         Odds checker is a <span className="text-text">size upgrade</span>, not a wait.
         The 35–50¢ row below is reporting only.
       </div>
+
+      {(s?.monitors?.length > 0) && (
+        <div className="mb-5 rounded-card border border-danger/40 bg-danger/10 p-3.5 text-[12.5px]">
+          <div className="font-semibold text-danger mb-2">Desk monitors</div>
+          <ul className="space-y-1 text-muted">
+            {s.monitors.map(m => (
+              <li key={m.id}>
+                <span className={m.severity === 'error' ? 'text-danger' : 'text-amber'}>
+                  {m.severity === 'error' ? '●' : '○'}
+                </span>
+                {' '}{m.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         <Stat label="Placed" value={s ? fmtNum(s.placed) : '—'} sub={`${fmtNum(s?.heldBack ?? 0)} held back`} />

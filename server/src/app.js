@@ -486,10 +486,11 @@ export function createApp() {
         autoPlace: cfg.shadowAutoPlace,
         bankroll: cfg.simulatedBankrollCents / 100,
         cashReservePct: Math.round(cfg.minimumFreeCashFraction * 100),
-        minPriceCents: cfg.minPriceCents,
+        minPriceCents: Math.min(25, cfg.minPriceCents),
         crossMarket: cfg.crossMarketEnabled,
         oddsFeed: oddsFeedConfigured(),
         deskSince: NEW_FORMULA_SINCE,
+        askOnly: true,
       },
     });
   }));

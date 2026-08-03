@@ -56,8 +56,8 @@ export default function Shadow() {
       <div className="mb-5 rounded-card border border-line2 bg-panel p-3.5 text-[12.5px] text-muted">
         Holds for “price floor” use the live derived floor above (usually ~{mode?.minPriceCents ?? 25}¢),
         not a fixed 50¢ rule. The <span className="text-text">35–50¢</span> row in the tilt audit is just
-        how underdog stakes are bucketed for reporting. “No book consensus” on ITF is usually books not
-        posting a line yet (or the odds cycle budget) — the engine fails closed until sportsbooks confirm.
+        how underdog stakes are bucketed for reporting. No sportsbook line yet → can still place at
+        <span className="text-text"> half stake</span> (Rated UTR + edge OK); full stake when books confirm.
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">

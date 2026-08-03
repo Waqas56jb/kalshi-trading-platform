@@ -321,10 +321,13 @@ async function computeSignals(client, rows, settings) {
     });
     if (inPlay) return inPlay;
 
-    /* Large UTR gaps are where wrong-player matches do the most damage
-       (Dreycopp/Ross shown ~8 vs true ~12). Flag for name verification —
-       books still have to confirm before auto-place, but the desk sees it. */
-    if (Math.abs(s.utr_gap ?? 0) >= 2) return 'verify_name_large_gap';
+    /* Large gaps + weak name match: flag. Strong UTR match scores are allowed
+       through for volume; shadow still tags Δ≥2 for desk review. */
+    if (Math.abs(s.utr_gap ?? 0) >= 2) {
+      const me = players.get(byTicker.get(s.ticker)?.competitor_id);
+      const score = Number(me?.utr_match_score);
+      if (!Number.isFinite(score) || score < 0.85) return 'verify_name_large_gap';
+    }
 
     return null;                                     // actionable
   };

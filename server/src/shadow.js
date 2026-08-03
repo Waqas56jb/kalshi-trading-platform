@@ -82,6 +82,10 @@ export async function loadRiskConfig() {
     crossMarketMinEdge: n(s.cross_market_min_edge, 0.03),
     crossMarketMinBooks: n(s.cross_market_min_books, 2),
     crossMarketMaxSpread: n(s.cross_market_max_spread, 0.10),
+    /* ITF often has no line until near first serve. Allow a reduced stake so
+       early-round volume is not zero; full size only when books confirm. */
+    crossMarketAllowMissing: s.cross_market_allow_missing !== false,
+    crossMarketMissingStakeMult: n(s.cross_market_missing_stake_mult, 0.5),
 
     maxBookParticipation: n(s.max_book_participation, 0.10),
     maxSignalAgeSeconds: n(s.max_signal_age_seconds, 60),
@@ -266,7 +270,8 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
             opp.yes_ask_cents as opponent_ask, opp.yes_bid_cents as opponent_bid,
             s.fair_cents, s.market_cents, s.utr_gap, s.side_type, s.opponent_name,
             s.model, s.computed_at,
-            p.utr_status, opp.ticker as opponent_ticker
+            p.utr_status, p.utr_match_score, p.utr_matched_name,
+            opp.ticker as opponent_ticker
      from ${t('markets')} m
      join ${t('signals')} s on s.ticker = m.ticker
      left join ${t('events')} e on e.event_ticker = m.event_ticker
@@ -425,10 +430,11 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
       oddsMissReason = 'odds_feed_not_configured';
     }
 
-    /* Δ ≥ 2 without sportsbook confirmation: hold. Wrong-player hits
-       concentrate in large gaps (Dreycopp/Ross/Kuznetsova). If books confirm,
-       allow but tag the decision for desk review. */
-    if (largeGap && (consensus?.consensus == null)) {
+    /* Δ ≥ 2: only hard-hold weak name matches without books. Strong UTR name
+       scores (≥0.85) or book confirmation can proceed (tagged for review). */
+    const matchScore = Number(c.utr_match_score);
+    const strongName = Number.isFinite(matchScore) && matchScore >= 0.85;
+    if (largeGap && consensus?.consensus == null && !strongName) {
       decisions.push({
         candidate: c,
         bestAskCents: c.yes_ask_cents,
@@ -438,7 +444,9 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
           stakeCents: 0,
           contracts: 0,
           limitingConstraint: 'verify name (Δ≥2)',
-          rejectionReason: `UTR gap ${c.utr_gap} ≥ 2 and no book consensus — confirm the matched player before placing.`
+          rejectionReason: `UTR gap ${c.utr_gap} ≥ 2, weak/unknown name match`
+            + (Number.isFinite(matchScore) ? ` (${matchScore})` : '')
+            + ' and no book consensus — confirm the player before placing.'
             + (oddsMissReason ? ` (${oddsMissReason})` : ''),
         },
       });

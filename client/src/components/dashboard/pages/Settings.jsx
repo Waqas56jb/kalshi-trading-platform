@@ -159,8 +159,8 @@ export default function Settings({ state, user, onUserChange }) {
               ['shadow_auto_place', 'Place trades automatically',
                 'No pings to accept — the engine takes every position that clears its own rules.'],
               ['cross_market_enabled', 'Confirm against sportsbooks',
-                'Requires the books to agree Kalshi is mispriced before any entry. Matches the books have '
-                + 'not priced yet are declined, so expect fewer entries with this on.'],
+                'When books have a line they must agree Kalshi is mispriced (full stake). '
+                + 'If ITF has no line yet, the engine can still enter at half stake.'],
             ].map(([key, label, help]) => (
               <label key={key} className="flex items-start gap-3 mb-4 cursor-pointer">
                 <input

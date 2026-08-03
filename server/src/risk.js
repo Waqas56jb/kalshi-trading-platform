@@ -360,40 +360,44 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
       'minimum ROI', withEv);
   }
 
-  /* Cross-market confirmation. Asks a different question from everything above:
-     not "does our model beat this price" but "is Kalshi mispriced against the
-     wider book market". Fails closed when required but absent — switching the
-     gate on is a decision that every gated trade carries book data. */
+  /* Cross-market confirmation. When books are present they must agree. When
+     they are absent (common on early ITF), optionally continue at a reduced
+     stake so early-round volume is not zero — full size only with consensus. */
   let crossEdge = null;
+  let booksProvisional = false;
   if (cfg.crossMarketEnabled) {
     if (opp.bookConsensus == null) {
-      const why = opp.oddsMissReason === 'odds_budget_exhausted'
-        ? 'Odds API budget for this sync cycle was used up — retry next cycle.'
-        : opp.oddsMissReason === 'fixture_found_no_quotes'
-          ? 'Fixture found but books have not posted a price yet (common on early ITF).'
-          : opp.oddsMissReason === 'odds_feed_not_configured'
-            ? 'Odds feed is not configured on the server.'
-            : 'No matching sportsbook fixture/odds yet — ITF lines often appear close to start.';
-      return reject(
-        `Cross-market confirmation required but no book consensus available. ${why}`,
-        'cross-market data', withEv);
-    }
-    crossEdge = opp.bookConsensus - effectivePrice;
-    if (crossEdge < cfg.crossMarketMinEdge) {
-      return reject(
-        `Books do not confirm: consensus edge ${(crossEdge * 100).toFixed(1)}pp `
-        + `below the required ${(cfg.crossMarketMinEdge * 100).toFixed(0)}pp.`,
-        'cross-market edge', { ...withEv, crossEdge });
-    }
-    if ((opp.supportingBooks ?? 0) < cfg.crossMarketMinBooks) {
-      return reject(
-        `Only ${opp.supportingBooks ?? 0} book(s) support the direction, `
-        + `${cfg.crossMarketMinBooks} required.`,
-        'supporting books', { ...withEv, crossEdge });
-    }
-    if ((opp.consensusRange ?? 0) > cfg.crossMarketMaxSpread) {
-      return reject('Books disagree too widely to be treated as a consensus.',
-        'consensus dispersion', { ...withEv, crossEdge });
+      if (!cfg.crossMarketAllowMissing) {
+        const why = opp.oddsMissReason === 'odds_budget_exhausted'
+          ? 'Odds API budget for this sync cycle was used up — retry next cycle.'
+          : opp.oddsMissReason === 'fixture_found_no_quotes'
+            ? 'Fixture found but books have not posted a price yet (common on early ITF).'
+            : opp.oddsMissReason === 'odds_feed_not_configured'
+              ? 'Odds feed is not configured on the server.'
+              : 'No matching sportsbook fixture/odds yet — ITF lines often appear close to start.';
+        return reject(
+          `Cross-market confirmation required but no book consensus available. ${why}`,
+          'cross-market data', withEv);
+      }
+      booksProvisional = true;
+    } else {
+      crossEdge = opp.bookConsensus - effectivePrice;
+      if (crossEdge < cfg.crossMarketMinEdge) {
+        return reject(
+          `Books do not confirm: consensus edge ${(crossEdge * 100).toFixed(1)}pp `
+          + `below the required ${(cfg.crossMarketMinEdge * 100).toFixed(0)}pp.`,
+          'cross-market edge', { ...withEv, crossEdge });
+      }
+      if ((opp.supportingBooks ?? 0) < cfg.crossMarketMinBooks) {
+        return reject(
+          `Only ${opp.supportingBooks ?? 0} book(s) support the direction, `
+          + `${cfg.crossMarketMinBooks} required.`,
+          'supporting books', { ...withEv, crossEdge });
+      }
+      if ((opp.consensusRange ?? 0) > cfg.crossMarketMaxSpread) {
+        return reject('Books disagree too widely to be treated as a consensus.',
+          'consensus dispersion', { ...withEv, crossEdge });
+      }
     }
   }
 
@@ -477,18 +481,37 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
       { ...sizing, netEdge: finalEdge, roi: finalRoi, vwap: fill.averagePrice });
   }
 
+  let stakeCents = fill.principalCents;
+  let contracts = fill.contracts;
+  let limitNote = fill.principalCents < desired ? 'order-book liquidity' : limiting;
+  if (booksProvisional) {
+    const mult = Math.min(1, Math.max(0.1, cfg.crossMarketMissingStakeMult ?? 0.5));
+    stakeCents = Math.floor(stakeCents * mult);
+    contracts = Math.max(0, Math.floor(contracts * mult));
+    if (stakeCents < cfg.minimumBetCents || contracts < 1) {
+      return reject(
+        `Provisional (no books) stake after ${Math.round(mult * 100)}% cut `
+        + `is below the minimum order.`,
+        'provisional stake',
+        { ...sizing, netEdge: finalEdge, roi: finalRoi, vwap: fill.averagePrice, booksProvisional });
+    }
+    limitNote = `provisional (no books · ${Math.round(mult * 100)}% stake)`
+      + (limitNote ? ` · ${limitNote}` : '');
+  }
+
   return {
     approved: true,
-    stakeCents: fill.principalCents,
-    contracts: fill.contracts,
+    stakeCents,
+    contracts,
     ...sizing,
     netEdge: finalEdge,
     roi: finalRoi,
     vwap: fill.averagePrice,
     effectiveCost: finalCost,
     bookLevelsUsed: fill.levels,
-    limitingConstraint: fill.principalCents < desired ? 'order-book liquidity' : limiting,
+    booksProvisional,
+    limitingConstraint: limitNote,
     rejectionReason: null,
-    finalBankrollFraction: riskBankroll > 0 ? fill.principalCents / riskBankroll : 0,
+    finalBankrollFraction: riskBankroll > 0 ? stakeCents / riskBankroll : 0,
   };
 }

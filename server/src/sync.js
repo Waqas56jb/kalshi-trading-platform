@@ -500,6 +500,8 @@ export async function runSync(kalshi, { verbose = false } = {}) {
          sub10_min_roi = least(coalesce(sub10_min_roi, 0.30), 0.20),
          max_signal_age_seconds = greatest(coalesce(max_signal_age_seconds, 60), 120),
          max_snapshot_age_seconds = greatest(coalesce(max_snapshot_age_seconds, 120), 180),
+         model_weight = greatest(coalesce(model_weight, 0.60), 0.75),
+         uncertainty_haircut = least(coalesce(uncertainty_haircut, 0.01), 0.005),
          updated_at = now()
        where id = 1`).catch(() => null);
 

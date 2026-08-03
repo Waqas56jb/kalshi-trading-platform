@@ -37,9 +37,11 @@ export async function loadRiskConfig() {
     fixedOperatingReserveCents: Math.round(n(s.fixed_operating_reserve_usd, 0) * 100),
     minimumBetCents: Math.round(n(s.minimum_bet_usd, 1) * 100),
 
-    modelWeight: n(s.model_weight, 0.60),
-    uncertaintyHaircut: n(s.uncertainty_haircut, 0.01),
-    sub10UncertaintyHaircut: n(s.sub10_uncertainty_haircut, 0.02),
+    /* Blend: modelWeight of UTR fair + (1-modelWeight) of Kalshi. Was 60/40;
+       75/25 is more risk-tolerant for early-round volume without ignoring the book. */
+    modelWeight: n(s.model_weight, 0.75),
+    uncertaintyHaircut: n(s.uncertainty_haircut, 0.005),
+    sub10UncertaintyHaircut: n(s.sub10_uncertainty_haircut, 0.015),
     transitionBandLow: n(s.transition_band_low, 0.07),
     transitionBandHigh: n(s.transition_band_high, 0.13),
 

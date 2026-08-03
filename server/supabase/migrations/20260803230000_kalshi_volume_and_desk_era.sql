@@ -18,6 +18,8 @@ update public.kalshi_settings set
   sub10_min_roi = 0.20,
   max_signal_age_seconds = 120,
   max_snapshot_age_seconds = 180,
+  model_weight = 0.75,
+  uncertainty_haircut = 0.005,
   updated_at = now()
 where id = 1;
 

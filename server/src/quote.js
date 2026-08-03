@@ -55,10 +55,11 @@ export function assessQuote({ bid, ask, opponentAsk = null }) {
     return { tradable: false, reason: 'spread_not_a_market', spread, overround };
   }
 
-  const thisSideLooksLive = ask >= 12 && ask <= 78
-    && (spread == null || spread <= MAX_REAL_SPREAD_CENTS);
+  /* Client (Max): the other side shouldn't matter if OUR ask is a real mid-range
+     offer. ITF favourite placeholders (90–95¢) used to zero the whole board. */
+  const thisSideLooksLive = ask >= 12 && ask <= 80;
 
-  /* Two-sided nonsense — unless this ask itself looks like a real resting offer. */
+  /* Two-sided nonsense — trade this side alone when the ask itself looks live. */
   if (overround != null && Math.abs(overround) > MAX_OVERROUND_CENTS) {
     if (thisSideLooksLive) {
       return { tradable: true, reason: null, spread, overround, oneSided: true };
@@ -66,7 +67,7 @@ export function assessQuote({ bid, ask, opponentAsk = null }) {
     return { tradable: false, reason: 'book_is_empty', spread, overround };
   }
   if (spread != null && spread > MAX_REAL_SPREAD_CENTS) {
-    if (thisSideLooksLive && ask <= 60) {
+    if (thisSideLooksLive) {
       return { tradable: true, reason: null, spread, overround, oneSided: true };
     }
     return { tradable: false, reason: 'spread_not_a_market', spread, overround };

@@ -253,11 +253,12 @@ async function shadowPortfolio(cfg) {
 export async function runShadowCycle(kalshi, { verbose = false } = {}) {
   const cfg = await loadRiskConfig();
 
-  /* The floor the data supports, not the one someone typed. Everything under 25c
-     lost across 237 settled bets, and the sub-10c band went 0 for 134. */
+  /* The floor the data supports, not the one someone typed. Cap at 25¢ — a
+     derived 50¢ floor was rejecting 36¢ asks (Shadow hold list) and zeroing
+     early-round volume Max/Robbie expect. */
   const limits = await derivedLimits().catch(() => ({}));
   if (limits.minimum_price?.value != null) {
-    cfg.minPriceCents = Math.round(limits.minimum_price.value);
+    cfg.minPriceCents = Math.min(25, Math.max(15, Math.round(limits.minimum_price.value)));
   }
 
   /* Entries are pre-match only — the client's rule, and the model's too: the
@@ -375,12 +376,29 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
        had at 14% came to be shown as "94% on Kalshi". When the pair is not a real
        book there is no anchor, and the opportunity is dropped rather than shrunk
        toward a number nobody was offering. */
-    const market = marketProbability({
+    let market = marketProbability({
       bid: c.yes_bid_cents,
       ask: c.yes_ask_cents,
       opponentBid: c.opponent_bid,
       opponentAsk: c.opponent_ask,
     });
+    /* Max: if our ask is already better than UTR fair, ignore the other side. */
+    const askBeatsFair = c.fair_cents != null && c.yes_ask_cents != null
+      && c.yes_ask_cents < c.fair_cents
+      && c.yes_ask_cents >= 12 && c.yes_ask_cents <= 80;
+    if (market.probability == null && askBeatsFair) {
+      const mid = c.yes_bid_cents != null
+        ? (c.yes_bid_cents + c.yes_ask_cents) / 2
+        : c.yes_ask_cents;
+      market = {
+        probability: mid / 100,
+        tradable: true,
+        reason: null,
+        oneSided: true,
+        spread: c.yes_bid_cents != null ? c.yes_ask_cents - c.yes_bid_cents : null,
+        overround: null,
+      };
+    }
     if (market.probability == null) {
       decisions.push({
         candidate: c,
@@ -816,7 +834,9 @@ export async function shadowSummary() {
       where archived_at is null and utr_bracket is not null
       group by 1 order by 1`),
     query(`select rejection_reason, limiting_constraint, count(*)::int n
-      from ${t('shadow_trades')} where archived_at is null and not approved
+      from ${t('shadow_trades')}
+      where archived_at is null and not approved
+        and created_at > now() - interval '12 hours'
       group by 1, 2 order by n desc limit 12`),
     /* The tilt audit: where the engine's entries actually sit on the price
        ladder. The standing worry is that the model leans on underdogs, and the

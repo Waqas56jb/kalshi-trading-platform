@@ -449,7 +449,9 @@ export async function deriveMinimumPrice({ minBandSample = 20, fallbackCents = 2
   });
 
   const firstGood = evidence.find(e => e.bets >= minBandSample && e.roi != null && e.roi >= 0);
-  const floorCents = firstGood ? firstGood.low : fallbackCents;
+  /* Never raise the live floor above 25¢ — a 50¢ derived floor blocked real
+     35–36¢ edges the desk wants in early rounds. */
+  const floorCents = Math.min(25, firstGood ? firstGood.low : fallbackCents);
 
   await query(
     `insert into ${t('derived_limits')} (name, value, unit, sample_size, evidence, computed_at)

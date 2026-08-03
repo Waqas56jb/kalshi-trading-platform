@@ -253,7 +253,7 @@ async function computeSignals(client, rows, settings) {
 
   const byTicker = new Map(rows.map(r => [r.ticker, r]));
   const activity = await bookActivity(client, rows.map(r => r.ticker));
-  const volThreshold = Number(settings.inplay_volume_threshold ?? 150);
+  const volThreshold = Number(settings.inplay_volume_threshold ?? 1000);
   const todayPT = dayIn(new Date());
 
   /**
@@ -417,7 +417,7 @@ async function markUnseenClosed(client, rows) {
 async function recordPlayState(client, rows, settings) {
   if (!rows.length) return 0;
   const act = await bookActivity(client, rows.map(r => r.ticker));
-  const threshold = Number(settings.inplay_volume_threshold ?? 150);
+  const threshold = Number(settings.inplay_volume_threshold ?? 1000);
 
   const states = rows.map(r => {
     const a = act.get(r.ticker);
@@ -502,6 +502,8 @@ export async function runSync(kalshi, { verbose = false } = {}) {
          model_weight = greatest(coalesce(model_weight, 0.60), 0.75),
          uncertainty_haircut = least(coalesce(uncertainty_haircut, 0.01), 0.005),
          min_price_cents = least(coalesce(min_price_cents, 25), 25),
+         /* 150 false-flagged pre-match ITF volume (Kamendje ~163) as in-play. */
+         inplay_volume_threshold = greatest(coalesce(inplay_volume_threshold, 150), 1000),
          updated_at = now()
        where id = 1`).catch(() => null);
     await query(

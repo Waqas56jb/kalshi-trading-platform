@@ -313,11 +313,14 @@ export function dayIn(date, timeZone = 'America/Los_Angeles') {
  */
 export function looksInPlay({
   bid, ask, recentMoveCents, volumeGrowth3h,
-  moveThreshold = 8, volumeThreshold = 150,
+  moveThreshold = 8, volumeThreshold = 1000,
 } = {}) {
   /* Volume growth is the strongest signal by a wide margin. Measured while ITF M25
      Koszalin was in play: markets under way had grown 48,047 / 17,936 / 1,182
-     contracts over three hours; markets yet to start had grown 0 / 0 / 9. */
+     contracts over three hours; markets yet to start had grown 0 / 0 / 9.
+     Threshold must stay near that in-play band — 150 was tripping pre-match
+     books like Kamendje (~163 OI at 34¢) and silently excluding them from
+     Shadow (play_state = in_play). */
   if (volumeGrowth3h != null && volumeGrowth3h >= volumeThreshold) return 'volume_says_in_play';
   if (bid != null && (bid <= 2 || bid >= 97)) return 'price_implies_in_play';
   if (ask != null && (ask <= 2 || ask >= 98)) return 'price_implies_in_play';

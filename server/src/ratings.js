@@ -127,6 +127,12 @@ export async function scrubUnusableRatings() {
                     is distinct from left(lower(split_part(trim(utr_matched_name), ' ', 1)), 1)
              )
            )
+        /* Always re-resolve Kuznetsova* — multiple ITF players, wrong profile
+           poisons fair (Rothensteiner vs Kuznetsova, Max Aug 4). */
+        or (
+             utr is not null
+             and lower(split_part(trim(name), ' ', -1)) in ('kuznetsova', 'kuznetcova')
+           )
      returning competitor_id, name, utr_status, utr_match_score, utr_matched_name`,
     [[...COMMON_SURNAMES]]);
   return { scrubbed: r.rowCount ?? 0, rows: r.rows.slice(0, 20) };

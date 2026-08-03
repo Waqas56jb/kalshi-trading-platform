@@ -290,7 +290,6 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
      where m.status in ('active','open','initialized')
        and s.fair_cents is not null
        and m.yes_ask_cents is not null
-       and coalesce(m.play_state, 'unknown') <> 'in_play'
        and coalesce(m.match_date, (now() at time zone 'America/Los_Angeles')::date)
              >= (now() at time zone 'America/Los_Angeles')::date
        and (e.schedule_confidence is distinct from 'exact'
@@ -329,6 +328,24 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
   for (const c of candidates) {
     // an open position is a fact, not a decision to remake every minute
     if (portfolio.heldTickers?.has(c.ticker)) continue;
+
+    /* play_state was silently dropping candidates from SQL — Held never showed
+       a reason (Kamendje). Record the hold instead. */
+    if (c.play_state === 'in_play') {
+      decisions.push({
+        candidate: c,
+        bestAskCents: c.yes_ask_cents,
+        levels: 0,
+        decision: {
+          approved: false,
+          stakeCents: 0,
+          contracts: 0,
+          limitingConstraint: 'match in play',
+          rejectionReason: 'play_state=in_play — entries are pre-match only.',
+        },
+      });
+      continue;
+    }
 
     /* Backstop for the pre-match gate: play_state can be up to a sync cycle
        stale, but a quote pinned at the extremes means the match is being

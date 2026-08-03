@@ -96,6 +96,9 @@ export const COMMON_SURNAMES = new Set([
   'xiao', 'park', 'choi', 'jung', 'cho', 'kang', 'yoon', 'jang', 'lim', 'shin',
   'oh', 'seo', 'singh', 'kumar', 'patel', 'nguyen', 'tran', 'le', 'pham', 'hoang',
   'vo', 'smith', 'jones', 'brown', 'garcia', 'martin', 'lopez',
+  /* Slavic / ITF collisions — Max: wrong Kuznetsova vs Rothensteiner. */
+  'kuznetsova', 'kuznetcova', 'ivanova', 'petrova', 'smirnova', 'popova',
+  'sokolova', 'novikova', 'morozova', 'volkova', 'pavkova', 'novakova',
 ]);
 
 /**
@@ -227,11 +230,12 @@ export async function lookupPlayer(name, {
 
   // Ambiguous: two strong hits with nearly the same name score — refuse rather
   // than guess (Max's Kuznetsova / wrong Wang cases).
+  // Common surnames: never let "Rated" break a tie between two Daria Kuznetsovas
+  // — that is exactly how the wrong profile won before.
   const second = scored[1];
-  if (second && (best.score - second.score) < minMargin
-    && best.given === second.given
-    && (!preferRated || best.rated === second.rated)) {
-    return null;
+  const commonSur = COMMON_SURNAMES.has(sur);
+  if (second && (best.score - second.score) < minMargin && best.given === second.given) {
+    if (commonSur || !preferRated || best.rated === second.rated) return null;
   }
 
   const h = best.hit;

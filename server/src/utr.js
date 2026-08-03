@@ -87,6 +87,23 @@ export function normaliseName(s = '') {
 
 const tokens = s => normaliseName(s).split(' ').filter(Boolean);
 
+/* Surnames that collide constantly on ITF (Max: Thamchaiwat vs the wrong Wang).
+   Surname-only overlap must not clear the confidence bar — given name required. */
+const COMMON_SURNAMES = new Set([
+  'wang', 'li', 'lee', 'kim', 'chen', 'zhang', 'liu', 'yang', 'huang', 'zhao',
+  'wu', 'zhou', 'xu', 'sun', 'ma', 'zhu', 'hu', 'guo', 'he', 'lin', 'gao',
+  'luo', 'zheng', 'liang', 'xie', 'song', 'tang', 'deng', 'han', 'cao', 'peng',
+  'xiao', 'park', 'choi', 'jung', 'cho', 'kang', 'yoon', 'jang', 'lim', 'shin',
+  'oh', 'seo', 'singh', 'kumar', 'patel', 'nguyen', 'tran', 'le', 'pham', 'hoang',
+  'vo', 'nguyen', 'smith', 'jones', 'brown', 'garcia', 'martin', 'lopez',
+]);
+
+function givenNameOverlap(a, b) {
+  if (a.length < 2 || b.length < 2) return 0;
+  const setB = new Set(b.slice(0, -1)); // everything except surname
+  return a.slice(0, -1).filter(t => setB.has(t)).length;
+}
+
 /**
  * Similarity in [0,1] between a Kalshi name and a UTR displayName.
  *
@@ -104,11 +121,23 @@ export function nameScore(kalshiName, utrName) {
   const base = overlap / Math.max(a.length, b.length);
 
   // surname agreement: last token of either side present on the other
-  const surnameOk = setB.has(a[a.length - 1]) || new Set(a).has(b[b.length - 1]);
+  const aSur = a[a.length - 1];
+  const bSur = b[b.length - 1];
+  const surnameOk = setB.has(aSur) || new Set(a).has(bSur);
   if (!surnameOk) return base * 0.35;
 
   // exact match after normalisation
   if (normaliseName(kalshiName) === normaliseName(utrName)) return 1;
+
+  /* Common surname (Wang, Li, Kim…): given-name overlap is mandatory. Otherwise
+     "Y. Wang" silently attaches to a different Rated Wang and poisons fair value. */
+  const commonSur = COMMON_SURNAMES.has(aSur) || COMMON_SURNAMES.has(bSur);
+  if (commonSur) {
+    const given = givenNameOverlap(a, b);
+    if (!given) return Math.min(base, 0.45); // below lookup minScore — refuse
+    return Math.min(1, base + 0.20);
+  }
+
   return Math.min(1, base + 0.15);
 }
 
@@ -157,16 +186,23 @@ export async function lookupPlayer(name, {
 
   const scored = hits
     .filter(h => !gender || !h.gender || h.gender === gender)
-    .map(h => ({
-      hit: h,
-      score: nameScore(name, h.displayName || `${h.firstName ?? ''} ${h.lastName ?? ''}`),
-      rated: (h.ratingStatusSingles ?? '') === 'Rated',
-    }))
+    .map(h => {
+      const display = h.displayName || `${h.firstName ?? ''} ${h.lastName ?? ''}`;
+      return {
+        hit: h,
+        display,
+        score: nameScore(name, display),
+        rated: (h.ratingStatusSingles ?? '') === 'Rated',
+        given: givenNameOverlap(tokens(name), tokens(display)),
+      };
+    })
     .sort((x, y) => {
-      // Rated profiles outrank Projected/Unrated when scores are close
-      if (preferRated && x.rated !== y.rated && Math.abs(x.score - y.score) < 0.20) {
+      // Never let "Rated" override a better given-name match on Wang/Li/Kim…
+      if (preferRated && x.rated !== y.rated && Math.abs(x.score - y.score) < 0.20
+        && x.given === y.given) {
         return x.rated ? -1 : 1;
       }
+      if (x.given !== y.given) return y.given - x.given;
       return y.score - x.score;
     });
 
@@ -174,9 +210,10 @@ export async function lookupPlayer(name, {
   if (!best || best.score < minScore) return null;
 
   // Ambiguous: two strong hits with nearly the same name score — refuse rather
-  // than guess (Max's Kuznetsova case: 7.21 vs the real 9.78).
+  // than guess (Max's Kuznetsova / wrong Wang cases).
   const second = scored[1];
   if (second && (best.score - second.score) < minMargin
+    && best.given === second.given
     && (!preferRated || best.rated === second.rated)) {
     return null;
   }

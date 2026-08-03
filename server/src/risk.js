@@ -367,7 +367,15 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
   let crossEdge = null;
   if (cfg.crossMarketEnabled) {
     if (opp.bookConsensus == null) {
-      return reject('Cross-market confirmation required but no book consensus available.',
+      const why = opp.oddsMissReason === 'odds_budget_exhausted'
+        ? 'Odds API budget for this sync cycle was used up — retry next cycle.'
+        : opp.oddsMissReason === 'fixture_found_no_quotes'
+          ? 'Fixture found but books have not posted a price yet (common on early ITF).'
+          : opp.oddsMissReason === 'odds_feed_not_configured'
+            ? 'Odds feed is not configured on the server.'
+            : 'No matching sportsbook fixture/odds yet — ITF lines often appear close to start.';
+      return reject(
+        `Cross-market confirmation required but no book consensus available. ${why}`,
         'cross-market data', withEv);
     }
     crossEdge = opp.bookConsensus - effectivePrice;

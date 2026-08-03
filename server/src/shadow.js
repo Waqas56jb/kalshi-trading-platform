@@ -308,7 +308,7 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
      cycle. Both caches inside the feed make the budget a worst case, not a
      steady state. */
   const useOddsFeed = cfg.crossMarketEnabled && oddsFeedConfigured();
-  let oddsBudget = 30;
+  let oddsBudget = 60;
 
   const decisions = [];
   for (const c of candidates) {
@@ -384,10 +384,26 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
     const priceAtModelTime = bestAskCents / 100;
     const bucket = probabilityBucket(modelProbability);
 
-    /* Rated players are trusted more than projected ones. This is the data
-       quality score the Kelly tiers scale by, and it is the honest place to
-       express that a projected UTR is a weaker input than a rated one. */
-    const dataQuality = c.utr_status === 'Rated' ? 1.0 : 0.7;
+    /* Rated only — Projected UTRs never trade. Signals already strip them from
+       fair value, but this backstops any stale row still in the candidate set. */
+    if (c.utr_status !== 'Rated') {
+      decisions.push({
+        candidate: c,
+        bestAskCents: c.yes_ask_cents,
+        levels: 0,
+        decision: {
+          approved: false,
+          stakeCents: 0,
+          contracts: 0,
+          limitingConstraint: 'utr not rated',
+          rejectionReason: 'UTR is not fully Rated (Projected/Unrated) — no trade until verified.',
+        },
+      });
+      continue;
+    }
+
+    const dataQuality = 1.0;
+    const largeGap = Math.abs(Number(c.utr_gap) || 0) >= 2;
 
     /* Book consensus for the cross-market gate. Null when the books have not
        priced this match, which for ITF is common until close to first serve —
@@ -395,10 +411,38 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
        whose de-vigged probability clears the ask by at least a point, the
        same individual-book test verifyAgainstBooks applies. */
     let consensus = null;
+    let oddsMissReason = null;
     if (useOddsFeed && oddsBudget > 0) {
       oddsBudget--;
       const q = await quotesForMatch(c.player_name, c.opponent_name).catch(() => null);
       if (q?.quotes?.length) consensus = bookConsensus(q.quotes);
+      else oddsMissReason = q == null
+        ? 'no_fixture_or_odds'
+        : 'fixture_found_no_quotes';
+    } else if (useOddsFeed) {
+      oddsMissReason = 'odds_budget_exhausted';
+    } else if (!oddsFeedConfigured()) {
+      oddsMissReason = 'odds_feed_not_configured';
+    }
+
+    /* Δ ≥ 2 without sportsbook confirmation: hold. Wrong-player hits
+       concentrate in large gaps (Dreycopp/Ross/Kuznetsova). If books confirm,
+       allow but tag the decision for desk review. */
+    if (largeGap && (consensus?.consensus == null)) {
+      decisions.push({
+        candidate: c,
+        bestAskCents: c.yes_ask_cents,
+        levels: 0,
+        decision: {
+          approved: false,
+          stakeCents: 0,
+          contracts: 0,
+          limitingConstraint: 'verify name (Δ≥2)',
+          rejectionReason: `UTR gap ${c.utr_gap} ≥ 2 and no book consensus — confirm the matched player before placing.`
+            + (oddsMissReason ? ` (${oddsMissReason})` : ''),
+        },
+      });
+      continue;
     }
 
     const opportunity = {
@@ -420,6 +464,8 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
         ? consensus.perBook.filter(p => p.probability - priceAtModelTime >= 0.01).length
         : 0,
       consensusRange: consensus?.range ?? null,
+      oddsMissReason,
+      nameCheckFlag: largeGap,
     };
 
     const decision = evaluateBet({
@@ -430,6 +476,12 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
       cfg,
       now,
     });
+    if (largeGap && decision.approved) {
+      decision.nameCheckFlag = true;
+      decision.limitingConstraint = decision.limitingConstraint
+        ? `${decision.limitingConstraint}; name check (Δ≥2)`
+        : 'name check (Δ≥2)';
+    }
 
     /* An approved bet consumes capacity for the rest of this cycle, or the
        engine would approve the same $75 of headroom to twenty markets at once. */
@@ -542,7 +594,8 @@ async function recordDecisions(decisions, cfg) {
        throttle_multiplier = excluded.throttle_multiplier,
        stake_usd = excluded.stake_usd, contracts = excluded.contracts,
        limiting_constraint = excluded.limiting_constraint,
-       rejection_reason = excluded.rejection_reason
+       rejection_reason = excluded.rejection_reason,
+       created_at = now()
      -- a filled position is a historical fact; re-evaluation must not rewrite it
      where ${t('shadow_trades')}.result is null`,
     [

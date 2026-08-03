@@ -50,9 +50,12 @@ export function StatusTag({ m }) {
     : <Tag className="bg-muted/12 text-muted">FAIR</Tag>;
 }
 
-export function Tag({ children, className = '' }) {
+export function Tag({ children, className = '', title }) {
   return (
-    <span className={`font-mono text-[11px] font-bold py-1 px-2.5 rounded-full inline-block ${className}`}>
+    <span
+      title={title}
+      className={`font-mono text-[11px] font-bold py-1 px-2.5 rounded-full inline-block ${className}`}
+    >
       {children}
     </span>
   );

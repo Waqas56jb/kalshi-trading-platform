@@ -2,7 +2,7 @@ import { config, t } from './config.js';
 import { syncSchedule } from './schedule.js';
 import { snapshotPortfolio, autoSellAtFair } from './orders.js';
 import { importKalshiHistory } from './importer.js';
-import { backfillRatings } from './ratings.js';
+import { backfillRatings, scrubUnusableRatings } from './ratings.js';
 import { syncSettlements } from './settlements.js';
 import { runShadowCycle, settleShadowTrades } from './shadow.js';
 import { settleResolvedTrades, tagOversizedAlertPathFills } from './repo.js';
@@ -223,7 +223,8 @@ async function computeSignals(client, rows, settings) {
   const players = new Map();
   if (ids.length) {
     const p = await client.query(
-      `select competitor_id, name, utr from ${t('players')} where competitor_id = any($1::text[])`, [ids]);
+      `select competitor_id, name, utr, utr_status, utr_matched_name, utr_match_score
+         from ${t('players')} where competitor_id = any($1::text[])`, [ids]);
     for (const r of p.rows) players.set(r.competitor_id, r);
   }
 
@@ -319,6 +320,11 @@ async function computeSignals(client, rows, settings) {
       volumeThreshold: volThreshold,
     });
     if (inPlay) return inPlay;
+
+    /* Large UTR gaps are where wrong-player matches do the most damage
+       (Dreycopp/Ross shown ~8 vs true ~12). Flag for name verification —
+       books still have to confirm before auto-place, but the desk sees it. */
+    if (Math.abs(s.utr_gap ?? 0) >= 2) return 'verify_name_large_gap';
 
     return null;                                     // actionable
   };
@@ -475,7 +481,10 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        nothing else looks them up, which is why only 42 of 92 markets could be
        priced — 29 of the 38 unrated players had never been tried. A match needs
        both sides rated, so every unrated player costs a market. */
-    await backfillRatings({ limit: 24, delayMs: 120 }).catch(() => null);
+    /* Drop Projected / weak-match numbers so the tighter lookup can re-resolve
+       (wrong Kuznetsova / low Dreycopp-style junk left from older matching). */
+    await scrubUnusableRatings().catch(() => null);
+    await backfillRatings({ limit: 40, delayMs: 120 }).catch(() => null);
 
     const out = await tx(async client => {
       await upsertPlayers(client, rows);
@@ -500,7 +509,7 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        variable: without it a market that leaves the feed is only ever marked
        closed, and 756 rows sat labelled with nothing at all. One page per series
        is enough to catch the day's settlements on a 60-second tick. */
-    const settled = await syncSettlements(kalshi, { maxPages: 1 })
+    const settled = await syncSettlements(kalshi, { maxPages: 3 })
       .catch(() => ({ updated: 0 }));
 
     /* Shadow trading, run here rather than on its own timer so the risk engine

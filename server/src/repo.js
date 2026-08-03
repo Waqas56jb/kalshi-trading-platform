@@ -31,7 +31,10 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
             e.matchup, e.tournament, e.round, e.tour_level,
             e.scheduled_at, e.schedule_confidence, e.schedule_source,
             s.fair_cents, s.ev_pct, s.utr_gap, s.player_utr, s.opponent_utr,
-            s.opponent_name, s.is_actionable, s.side_type,
+            s.opponent_name, s.is_actionable, s.review_reason, s.side_type,
+            p.utr_status as player_utr_status,
+            p.utr_matched_name as player_utr_matched_name,
+            p.utr_match_score as player_utr_match_score,
             -- the other half of the book. The client was explicit: both sides of
             -- a match must be visible, each with its own quote — one side's price
             -- is never 1 minus the other's, because each contract carries its own
@@ -47,6 +50,7 @@ export async function listMarkets({ filter = 'all', search = '', limit = 200, so
      from ${t('markets')} m
      join ${t('events')} e using (event_ticker)
      left join ${t('signals')} s on s.ticker = m.ticker
+     left join ${t('players')} p on p.competitor_id = m.competitor_id
      left join ${t('markets')} opp
        on opp.event_ticker = m.event_ticker and opp.ticker <> m.ticker
      where m.status in ('active','open','initialized')
@@ -240,15 +244,19 @@ export async function tagOversizedAlertPathFills() {
 
 export async function listTrades({ filter = 'all', limit = 200 } = {}) {
   const r = await query(
-    `select tr.*, (${DESK_PNL})::numeric as desk_pnl_usd
+    `select tr.*, (${DESK_PNL})::numeric as desk_pnl_usd,
+            m.result as market_result,
+            m.status as market_status,
+            m.settled_at as market_settled_at
      from ${t('trades')} tr
-     where archived_at is null and case $1
-             when 'won'  then result = 'won'
-             when 'lost' then result = 'lost'
-             when 'open' then status in ('pending','filled','partial')
+     left join ${t('markets')} m on m.ticker = tr.ticker
+     where tr.archived_at is null and case $1
+             when 'won'  then tr.result = 'won'
+             when 'lost' then tr.result = 'lost'
+             when 'open' then tr.status in ('pending','filled','partial')
              else true
            end
-     order by placed_at desc limit $2`,
+     order by tr.placed_at desc limit $2`,
     [filter, limit],
   );
   return r.rows;
@@ -279,16 +287,60 @@ export async function insertTrade(tr) {
  * computed from what actually happened on court — only the order was simulated.
  * A YES contract pays $1 if it wins and $0 if it loses.
  */
-export async function settleResolvedTrades(kalshi, { limit = 40 } = {}) {
-  const open = await query(
-    `select distinct on (tr.ticker) tr.id, tr.ticker, tr.side, tr.entry_cents, tr.size_contracts
-     from ${t('trades')} tr
-     where tr.archived_at is null and tr.status in ('filled','partial') and tr.result is null
-     order by tr.ticker, tr.id
-     limit $1`, [limit]);
+/**
+ * Books WON/LOST on filled trades once the market has a yes/no result.
+ *
+ * Prefers the local markets table (same source shadow P&L uses after
+ * syncSettlements). Falling back only to a live Kalshi read left Lopez
+ * Montagud-style rows on FILLED with Sell early after the match was done,
+ * because settlement sync had the outcome but this path never looked at it.
+ */
+export async function settleResolvedTrades(kalshi, { limit = 40, localOnly = false } = {}) {
+  /* Batch path — every open fill whose market already carries yes/no. */
+  const fromLocal = await query(
+    `update ${t('trades')} tr set
+       status = 'settled',
+       result = case
+         when (tr.side = 'yes' and m.result = 'yes')
+           or (tr.side = 'no'  and m.result = 'no') then 'won'
+         else 'lost'
+       end,
+       settle_result = m.result,
+       settled_price_cents = case
+         when (tr.side = 'yes' and m.result = 'yes')
+           or (tr.side = 'no'  and m.result = 'no') then 100
+         else 0
+       end,
+       pnl_usd = round((
+         (case
+            when (tr.side = 'yes' and m.result = 'yes')
+              or (tr.side = 'no'  and m.result = 'no') then 100
+            else 0
+          end - coalesce(tr.entry_cents, 0)) * coalesce(tr.size_contracts, 0)
+       ) / 100.0, 2),
+       settled_at = coalesce(m.settled_at, now())
+     from ${t('markets')} m
+     where m.ticker = tr.ticker
+       and tr.archived_at is null
+       and tr.status in ('filled','partial')
+       and tr.result is null
+       and m.result in ('yes','no')
+     returning tr.id`);
 
-  let settled = 0;
+  let settled = fromLocal.rowCount ?? 0;
   const errors = [];
+  if (localOnly || !kalshi) {
+    return { checked: fromLocal.rowCount ?? 0, settled, errors };
+  }
+
+  const open = await query(
+    `select tr.id, tr.ticker, tr.side, tr.entry_cents, tr.size_contracts
+     from ${t('trades')} tr
+     left join ${t('markets')} m on m.ticker = tr.ticker
+     where tr.archived_at is null and tr.status in ('filled','partial') and tr.result is null
+       and (m.result is null or m.result not in ('yes','no'))
+     order by tr.placed_at asc
+     limit $1`, [limit]);
 
   for (const row of open.rows) {
     let market;
@@ -299,11 +351,10 @@ export async function settleResolvedTrades(kalshi, { limit = 40 } = {}) {
       errors.push(`${row.ticker}: ${e.message.slice(0, 80)}`);
       continue;
     }
-    const status = market?.status;
-    const result = market?.result;
-    if (!result || !['settled', 'finalized', 'closed'].includes(status)) continue;   // still live
+    const result = String(market?.result ?? '').toLowerCase();
+    // Outcome is enough — do not wait on status wording (active/closed lag).
+    if (result !== 'yes' && result !== 'no') continue;
 
-    // YES pays 100c on 'yes'; NO pays 100c on 'no'
     const won = (row.side === 'yes' && result === 'yes') || (row.side === 'no' && result === 'no');
     const payoutCents = won ? 100 : 0;
     const size = Number(row.size_contracts ?? 0);
@@ -312,19 +363,27 @@ export async function settleResolvedTrades(kalshi, { limit = 40 } = {}) {
     const upd = await query(
       `update ${t('trades')} set status = 'settled', result = $2, settle_result = $3,
          settled_price_cents = $4, pnl_usd = $5, settled_at = now()
-       /* By id, not by ticker. The P&L above is derived from this row's own
-          entry price and size, and two trades on the same ticker can differ in
-          both, so a ticker-wide update wrote one position's result onto every
-          other — archived rows included. */
        where id = $6 and archived_at is null
          and status in ('filled','partial') and result is null
        returning id`,
       [row.ticker, won ? 'won' : 'lost', result, payoutCents, pnl.toFixed(2), row.id],
     );
     settled += upd.rowCount ?? 0;
+
+    /* Keep markets in sync so the next list/shadow settle is instant. */
+    await query(
+      `update ${t('markets')} set result = $2, status = 'settled',
+         settled_at = coalesce(settled_at, now())
+       where ticker = $1 and (result is null or result is distinct from $2)`,
+      [row.ticker, result],
+    ).catch(() => null);
   }
 
-  return { checked: open.rowCount ?? 0, settled, errors: errors.slice(0, 5) };
+  return {
+    checked: (fromLocal.rowCount ?? 0) + (open.rowCount ?? 0),
+    settled,
+    errors: errors.slice(0, 5),
+  };
 }
 
 /* ---------------------------------------------------------------- analytics */

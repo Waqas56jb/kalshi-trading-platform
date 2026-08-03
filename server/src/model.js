@@ -202,17 +202,22 @@ export function midPrice(m) {
 
 /**
  * Builds signals for the two markets of one event.
- * `players` maps competitor_id -> { name, utr }.
+ * `players` maps competitor_id -> { name, utr, utr_status }.
+ * Only Rated UTRs price a market — Projected numbers are treated as unrated.
  */
 export function buildSignalsForEvent(markets, players, curve = null, logisticK = null) {
   if (markets.length !== 2) return [];       // only head-to-head binaries are modelled
+
+  const ratedUtr = (p) => (
+    p?.utr != null && p.utr_status === 'Rated' ? Number(p.utr) : null
+  );
 
   return markets.map((m, i) => {
     const opp = markets[1 - i];
     const me = players.get(m.competitor_id);
     const you = players.get(opp.competitor_id);
-    const myUtr = me?.utr != null ? Number(me.utr) : null;
-    const oppUtr = you?.utr != null ? Number(you.utr) : null;
+    const myUtr = ratedUtr(me);
+    const oppUtr = ratedUtr(you);
 
     const gap = myUtr != null && oppUtr != null ? +(myUtr - oppUtr).toFixed(2) : null;
     /* Pricing preference, best evidence first: the smooth logistic fitted to

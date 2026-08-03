@@ -20,7 +20,7 @@ import {
 import { probe as probeSchedule, syncSchedule } from './schedule.js';
 import { importKalshiHistory } from './importer.js';
 import * as repo from './repo.js';
-import { backfillRatings, ratingsCoverage } from './ratings.js';
+import { backfillRatings, ratingsCoverage, scrubUnusableRatings } from './ratings.js';
 import {
   authConfigured, authenticate, countAdmins, createUser, deleteUser, findUserByEmail,
   getUser, listUsers, logAuthEvent, updateUser, verifyPassword, verifyToken,
@@ -434,6 +434,9 @@ export function createApp() {
   }));
 
   api.get('/trades', requireAuth, h(async (req, res) => {
+    /* Book any fills whose market already has yes/no locally — stops finished
+       matches sitting on Sell early with blank P&L until someone hits Settle. */
+    await repo.settleResolvedTrades(null, { localOnly: true }).catch(() => null);
     res.json({ trades: await repo.listTrades({ filter: String(req.query.filter ?? 'all') }) });
   }));
 
@@ -495,6 +498,8 @@ export function createApp() {
     const limit = Math.min(300, Number(req.query.limit) || 100);
     const filter = approved === 'true' ? 'where approved'
       : approved === 'false' ? 'where not approved' : '';
+    /* Newest first — ranking by edge buried today's engine activity under older
+       high-edge rows, which made the desk look 24h out of date. */
     const r = await query(
       `select ticker, player_name, opponent_name, side, utr_gap, utr_bracket,
               model_probability, market_reference, conservative_prob,
@@ -504,7 +509,7 @@ export function createApp() {
               stake_usd, contracts, limiting_constraint, rejection_reason,
               result, pnl_usd, match_date, created_at
        from ${t('shadow_trades')} ${filter}
-       order by approved desc, abs(coalesce(net_edge,0)) desc, created_at desc
+       order by created_at desc
        limit $1`, [limit]);
     res.json({ decisions: r.rows });
   }));
@@ -666,8 +671,11 @@ export function createApp() {
     if (!requireCronOrAdmin(req, res)) return;
     const limit = Math.min(Number(req.query.limit) || 40, 120);
     const retryFailed = req.query.retry === '1';
+    const scrub = req.query.scrub === '1'
+      ? await scrubUnusableRatings().catch(() => null)
+      : null;
     const stats = await backfillRatings({ limit, delayMs: 220, retryFailed });
-    res.json({ ...stats, coverage: await ratingsCoverage() });
+    res.json({ ...stats, scrub, coverage: await ratingsCoverage() });
   }));
 
   api.all('/portfolio/snapshot', h(async (req, res) => {

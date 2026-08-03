@@ -51,7 +51,10 @@ export async function backfillRatings({
     }
 
     if (hit) {
-      // Only a "Rated" profile with an actual number can price a market.
+      // Only a Rated profile with a real number may price a market. Projected /
+      // Unrated numbers are stored as status metadata but utr is cleared so
+      // Dreycopp/Ross-style junk (3–8 UTR on a 12-range ITF player) cannot
+      // reach fair value. Robbie/Max: verified Rated only, with a checkmark.
       const usable = hit.utr != null && hit.utr_status === 'Rated';
       if (usable) stats.rated++; else stats.unrated++;
 
@@ -62,7 +65,9 @@ export async function backfillRatings({
            utr_source = 'utrsports.net', utr_updated_at = now(),
            lookup_attempted_at = now(), lookup_failed = false
          where competitor_id = $1`,
-        [p.competitor_id, hit.utr, hit.utr_doubles, hit.utr_status, hit.utr_player_id,
+        [p.competitor_id,
+          usable ? hit.utr : null,
+          hit.utr_doubles, hit.utr_status, hit.utr_player_id,
           hit.utr_matched_name, hit.utr_match_score, hit.utr_nationality],
       );
     } else {
@@ -91,4 +96,25 @@ export async function ratingsCoverage() {
      from ${t('players')}`,
   );
   return r.rows[0];
+}
+
+/**
+ * Clears Projected/Unrated numbers and weak name matches so the next backfill
+ * re-resolves them under the tighter rules. Idempotent.
+ */
+export async function scrubUnusableRatings() {
+  const r = await query(
+    `update ${t('players')} set
+       utr = null,
+       lookup_attempted_at = null,
+       lookup_failed = false,
+       utr_updated_at = now()
+     where (
+             utr is not null and coalesce(utr_status, '') <> 'Rated'
+           )
+        or (
+             utr is not null and coalesce(utr_match_score, 0) < 0.72
+           )
+     returning competitor_id, name, utr_status, utr_match_score`);
+  return { scrubbed: r.rowCount ?? 0, rows: r.rows.slice(0, 20) };
 }

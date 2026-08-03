@@ -124,12 +124,26 @@ export default function Markets({ search }) {
                     <StartCell matchDate={m.match_date} playState={m.play_state} volumeGrowth={m.volume_growth_3h} />
                   </td>
                   <td className="font-mono font-semibold">
-                    {m.player_utr != null
-                      ? `${m.player_utr}${m.opponent_utr != null ? ` · ${m.opponent_utr}` : ''}`
-                      : <span className="text-muted2">unrated</span>}
+                    {m.player_utr != null ? (
+                      <span title={m.player_utr_matched_name
+                        ? `Matched: ${m.player_utr_matched_name}`
+                          + (m.player_utr_match_score != null ? ` (${m.player_utr_match_score})` : '')
+                        : undefined}>
+                        {m.player_utr}
+                        {m.player_utr_status === 'Rated' && (
+                          <span className="text-up ml-0.5" title="UTR Rated (verified)">✓</span>
+                        )}
+                        {m.opponent_utr != null ? ` · ${m.opponent_utr}` : ''}
+                      </span>
+                    ) : <span className="text-muted2">unrated</span>}
                   </td>
                   <td className="font-mono font-semibold text-ace">
                     {m.utr_gap != null ? `Δ ${m.utr_gap}` : '—'}
+                    {Math.abs(Number(m.utr_gap) || 0) >= 2 && (
+                      <span className="block text-[10px] text-amber font-sans font-semibold" title="Large gap — verify player identity">
+                        VERIFY NAME
+                      </span>
+                    )}
                   </td>
                   <td className="font-mono font-semibold">{m.fair_cents != null ? `${m.fair_cents}¢` : '—'}</td>
                   <td className="font-mono text-muted">{m.yes_bid_cents != null ? `${m.yes_bid_cents}¢` : '—'}</td>
@@ -163,6 +177,9 @@ export default function Markets({ search }) {
                   <td>
                     <div className="flex flex-col gap-1 items-start">
                       <StatusTag m={m} />
+                      {m.review_reason === 'verify_name_large_gap' && (
+                        <Tag className="bg-amber/15 text-amber">NAME CHECK</Tag>
+                      )}
                       {m.side_type === 'favourite' && <Tag className="bg-ace-dim text-ace">FAV</Tag>}
                       {m.side_type === 'underdog' && <Tag className="bg-amber/15 text-amber">DOG</Tag>}
                     </div>

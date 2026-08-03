@@ -24,9 +24,13 @@ export default function Trades({ user }) {
   const [settling, setSettling] = useState(false);
   const [closing, setClosing] = useState(null);
   const { data, error, loading, refresh } = usePoll(() => api.trades(filter), {
-    intervalMs: 15000, deps: [filter],
+    intervalMs: 8000, deps: [filter],
   });
+  /* Engine decisions (newest first) — fills also land in this ledger when
+     auto-place runs; this strip shows holds/approvals even before a fill row. */
+  const engine = usePoll(() => api.shadowDecisions('all', 25), { intervalMs: 10000 });
   const rows = data?.trades ?? [];
+  const engineRows = engine.data?.decisions ?? [];
   const isAdmin = user?.role === 'admin';
 
   /** Asks Kalshi whether any held market has resolved, and books the result. */
@@ -66,13 +70,22 @@ export default function Trades({ user }) {
     }
   };
 
-  const isOpen = t => ['filled', 'partial'].includes(t.status);
+  /* Only offer Sell early while the position is truly live. Once Kalshi (or our
+     markets table) has yes/no, settle books WON/LOST — Sell early on a finished
+     match was the Lopez Montagud bug. */
+  const canSellEarly = t => ['filled', 'partial'].includes(t.status)
+    && !t.result
+    && t.market_result !== 'yes'
+    && t.market_result !== 'no';
+  const awaitingSettle = t => ['filled', 'partial'].includes(t.status)
+    && !t.result
+    && (t.market_result === 'yes' || t.market_result === 'no');
 
   return (
     <div className="animate-page-in">
       <PageHead
         title="Trade history"
-        sub="Every execution attempt, fill and settlement on this desk"
+        sub="Paper/live fills from auto-place · engine decisions refresh below every few seconds"
         action={
           <div className="flex gap-2 items-center flex-wrap max-sm:w-full">
             {FILTERS.map(([id, label]) => (
@@ -88,6 +101,49 @@ export default function Trades({ user }) {
       />
 
       {error && <ErrorBox error={error} />}
+
+      {engineRows.length > 0 && (
+        <div className="bg-panel border border-line rounded-card overflow-hidden mb-5.5">
+          <div className="px-4 py-3 border-b border-line text-[12.5px] text-muted">
+            <span className="text-text font-semibold">Latest engine activity</span>
+            {' '}(approvals + holds · newest first — also on Shadow desk)
+          </div>
+          <div className="overflow-x-auto">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>When</th><th>Player</th><th>Ask</th><th>Δ</th><th>Decision</th><th>Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                {engineRows.slice(0, 12).map((d, i) => (
+                  <tr key={`${d.ticker}-${d.created_at}-${i}`}>
+                    <td className="font-mono text-muted whitespace-nowrap">{fmtTime(d.created_at)}</td>
+                    <td>
+                      <div className="font-semibold text-[13px]">{d.player_name}</div>
+                      {d.opponent_name && (
+                        <div className="text-[11px] text-muted2 font-mono">vs {d.opponent_name}</div>
+                      )}
+                    </td>
+                    <td className="font-mono">{d.best_ask_cents != null ? `${d.best_ask_cents}¢` : '—'}</td>
+                    <td className="font-mono text-ace">{d.utr_gap != null ? `Δ ${d.utr_gap}` : '—'}</td>
+                    <td>
+                      {d.approved
+                        ? <Tag className="bg-up/12 text-up">APPROVED</Tag>
+                        : <Tag className="bg-amber/15 text-amber">HELD</Tag>}
+                    </td>
+                    <td className="text-[12px] text-muted max-w-[280px]">
+                      {d.approved
+                        ? (d.stake_usd != null ? `${fmtUsd(d.stake_usd)} · ${d.contracts ?? '—'}c` : 'placed')
+                        : (d.limiting_constraint || d.rejection_reason || '—')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="bg-panel border border-line rounded-card overflow-hidden mb-5.5">
         <div className="overflow-x-auto">
@@ -145,7 +201,7 @@ export default function Trades({ user }) {
                         : '—'}
                     </td>
                     <td>
-                      {isOpen(t) && (
+                      {canSellEarly(t) && (
                         <button
                           className="btn btn-danger btn-sm"
                           onClick={() => setConfirmClose(t)}
@@ -154,6 +210,9 @@ export default function Trades({ user }) {
                         >
                           {closing === t.id ? 'Selling…' : 'Sell early'}
                         </button>
+                      )}
+                      {awaitingSettle(t) && (
+                        <Tag className="bg-amber/15 text-amber">BOOKING P&L</Tag>
                       )}
                       {t.exit_reason === 'auto_fair_value' && (
                         <Tag className="bg-ace-dim text-ace">AUTO</Tag>
@@ -168,9 +227,9 @@ export default function Trades({ user }) {
 
         {!rows.length && (loading
           ? <Loading label="Loading ledger…" />
-          : <Empty icon="📓" title="No trades yet">
-              Approve an alert to place your first order. Every attempt — including rejected ones —
-              is recorded here.
+          : <Empty icon="📓" title="No fills in the ledger yet">
+              Auto-place writes paper/live fills here when the engine approves. Holds and near-misses
+              show in Latest engine activity above and on the Shadow desk.
             </Empty>)}
       </div>
 

@@ -144,8 +144,14 @@ async function searchUtr(name, { signal, top = 8 } = {}) {
 /**
  * Resolves one player name to a UTR rating.
  * Returns null when nothing clears the confidence bar — never a guess.
+ *
+ * Duplicate surnames (two Daria Kuznetsovas, etc.) are the main failure mode:
+ * we prefer Rated profiles, require a clear gap over the second-best hit, and
+ * use a higher default score bar so a weak surname overlap cannot win.
  */
-export async function lookupPlayer(name, { gender, minScore = 0.55, signal } = {}) {
+export async function lookupPlayer(name, {
+  gender, minScore = 0.72, minMargin = 0.12, preferRated = true, signal,
+} = {}) {
   const hits = await searchUtr(name, { signal });
   if (!hits.length) return null;
 
@@ -154,11 +160,26 @@ export async function lookupPlayer(name, { gender, minScore = 0.55, signal } = {
     .map(h => ({
       hit: h,
       score: nameScore(name, h.displayName || `${h.firstName ?? ''} ${h.lastName ?? ''}`),
+      rated: (h.ratingStatusSingles ?? '') === 'Rated',
     }))
-    .sort((x, y) => y.score - x.score);
+    .sort((x, y) => {
+      // Rated profiles outrank Projected/Unrated when scores are close
+      if (preferRated && x.rated !== y.rated && Math.abs(x.score - y.score) < 0.20) {
+        return x.rated ? -1 : 1;
+      }
+      return y.score - x.score;
+    });
 
   const best = scored[0];
   if (!best || best.score < minScore) return null;
+
+  // Ambiguous: two strong hits with nearly the same name score — refuse rather
+  // than guess (Max's Kuznetsova case: 7.21 vs the real 9.78).
+  const second = scored[1];
+  if (second && (best.score - second.score) < minMargin
+    && (!preferRated || best.rated === second.rated)) {
+    return null;
+  }
 
   const h = best.hit;
   const utr = h.singlesUtr != null ? Number(h.singlesUtr) : null;

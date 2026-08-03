@@ -40,13 +40,25 @@ export default function Shadow() {
           </Tag>
           <Tag className="bg-panel border border-line">BANKROLL {fmtUsd(mode.bankroll)}</Tag>
           <Tag className="bg-panel border border-line">{mode.cashReservePct}% CASH RESERVE</Tag>
-          <Tag className="bg-panel border border-line">FLOOR {mode.minPriceCents}¢</Tag>
+          <Tag
+            className="bg-panel border border-line"
+            title="Derived risk floor (typically ~25¢). The 35–50¢ band in the tilt audit is an underdog price bucket, not a hard hold rule."
+          >
+            PRICE FLOOR {mode.minPriceCents}¢
+          </Tag>
           <Tag className="bg-panel border border-line">
             BOOKS {mode.crossMarket && mode.oddsFeed ? 'CONFIRMING'
               : mode.oddsFeed ? 'CONNECTED — GATE OFF' : 'NOT CONNECTED'}
           </Tag>
         </div>
       )}
+
+      <div className="mb-5 rounded-card border border-line2 bg-panel p-3.5 text-[12.5px] text-muted">
+        Holds for “price floor” use the live derived floor above (usually ~{mode?.minPriceCents ?? 25}¢),
+        not a fixed 50¢ rule. The <span className="text-text">35–50¢</span> row in the tilt audit is just
+        how underdog stakes are bucketed for reporting. “No book consensus” on ITF is usually books not
+        posting a line yet (or the odds cycle budget) — the engine fails closed until sportsbooks confirm.
+      </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         <Stat label="Placed" value={s ? fmtNum(s.placed) : '—'} sub={`${fmtNum(s?.heldBack ?? 0)} held back`} />

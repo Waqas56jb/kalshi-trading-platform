@@ -36,12 +36,13 @@ function orientScore(score, apiP1, apiP2, matchupA, matchupB) {
  * Pull scores for settled markets that still lack final_score.
  * Budget-limited per sync against the RapidAPI rate cap.
  */
-export async function syncMatchScores({ limit = 40 } = {}) {
+export async function syncMatchScores({ limit = 8 } = {}) {
   await ensureScoreColumns();
   if (!oddsFeedConfigured()) return { updated: 0, skipped: 'odds_feed_not_configured' };
 
   const { rows: markets } = await query(
-    `select m.ticker, m.event_ticker, m.player_name, m.match_date::text as match_date,
+    `select distinct on (m.event_ticker)
+            m.ticker, m.event_ticker, m.player_name, m.match_date::text as match_date,
             e.matchup,
             opp.player_name as opponent_name
      from ${t('markets')} m
@@ -52,7 +53,7 @@ export async function syncMatchScores({ limit = 40 } = {}) {
        and m.final_score is null
        and m.match_date is not null
        and m.match_date >= (now() at time zone 'America/Los_Angeles')::date - 5
-     order by m.settled_at desc nulls last, m.match_date desc
+     order by m.event_ticker, m.settled_at desc nulls last
      limit $1`,
     [limit],
   );
@@ -60,34 +61,31 @@ export async function syncMatchScores({ limit = 40 } = {}) {
 
   let updated = 0;
   let missed = 0;
-  const seenEvents = new Set();
 
-  for (const m of markets) {
-    if (seenEvents.has(m.event_ticker)) continue;
-
-    const [a, b] = String(m.matchup ?? '').split(/\s+vs\.?\s+/i);
-    const p1 = m.player_name || a;
-    const p2 = m.opponent_name || b;
-    if (!p1 || !p2 || !m.match_date) { missed += 1; continue; }
-
-    const hit = await scoreForMatch(p1, p2, m.match_date);
-    if (!hit?.score) { missed += 1; continue; }
-
-    const display = orientScore(hit.score, hit.p1, hit.p2, a || p1, b || p2);
-
-    const r = await query(
-      `update ${t('markets')} set
-         final_score = $2,
-         score_source = 'tennis-api'
-       where event_ticker = $1 and final_score is null`,
-      [m.event_ticker, display],
-    );
-    const n = r.rowCount ?? 0;
-    if (n > 0) {
-      updated += n;
-      seenEvents.add(m.event_ticker);
-    } else {
-      missed += 1;
+  /* Parallel small batches — keep total score work under ~10s of the sync. */
+  const concurrency = 3;
+  for (let i = 0; i < markets.length; i += concurrency) {
+    const slice = markets.slice(i, i + concurrency);
+    const results = await Promise.all(slice.map(async m => {
+      const [a, b] = String(m.matchup ?? '').split(/\s+vs\.?\s+/i);
+      const p1 = m.player_name || a;
+      const p2 = m.opponent_name || b;
+      if (!p1 || !p2 || !m.match_date) return { ok: false };
+      const hit = await scoreForMatch(p1, p2, m.match_date);
+      if (!hit?.score) return { ok: false };
+      const display = orientScore(hit.score, hit.p1, hit.p2, a || p1, b || p2);
+      const r = await query(
+        `update ${t('markets')} set
+           final_score = $2,
+           score_source = 'tennis-api'
+         where event_ticker = $1 and final_score is null`,
+        [m.event_ticker, display],
+      );
+      return { ok: (r.rowCount ?? 0) > 0 };
+    }));
+    for (const r of results) {
+      if (r.ok) updated += 1;
+      else missed += 1;
     }
   }
 

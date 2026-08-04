@@ -41,6 +41,9 @@ export default function Overview({ health, settings, onPage }) {
         sub={data?.sync?.finished_at
           ? `Desk is live · syncing automatically · updated ${syncAge == null ? 'just now'
               : syncAge < 60 ? `${syncAge}s ago` : `${Math.round(syncAge / 60)}m ago`}`
+            + (syncAge != null && syncAge > 180
+              ? ' — open the app / unlock phone to resume (or wait for background cron)'
+              : '')
           : 'Connecting to the desk…'}
         action={
           <button className="btn btn-ace btn-sm" onClick={() => onPage('shadow')}>

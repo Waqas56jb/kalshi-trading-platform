@@ -19,9 +19,9 @@ const HOST = 'tennis-api-atp-wta-itf.p.rapidapi.com';
 const apiKey = () => process.env.TENNIS_API_KEY || '';
 export const oddsFeedConfigured = () => Boolean(apiKey());
 
-async function fetchJson(path) {
+async function fetchJson(path, { timeoutMs = 8000 } = {}) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(`https://${HOST}${path}`, {
       headers: { 'X-RapidAPI-Key': apiKey(), 'X-RapidAPI-Host': HOST },
@@ -176,7 +176,8 @@ export async function scoreForMatch(playerName, opponentName, dateOnly) {
     const path = `/tennis/v2/extend/api/event/get/`
       + `${encodeURIComponent(a)}/${encodeURIComponent(b)}/${encodeURIComponent(dateOnly)}`;
     try {
-      const j = await fetchJson(path);
+      /* Short timeout — scores must not blow the Vercel 60s sync budget. */
+      const j = await fetchJson(path, { timeoutMs: 4000 });
       const r = j?.result ?? j?.data ?? null;
       if (!r) return null;
       const raw = r.score ?? r.result ?? null;

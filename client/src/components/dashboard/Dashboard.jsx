@@ -23,8 +23,8 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
 
   /* Drives the sync from the browser, on its own timer, results ignored. The
      server holds the lock and skips when the data is already fresh, so several
-     open tabs cost nothing. This is what keeps the desk current without a manual
-     button and without a cron tier that only fires once a day. */
+     open tabs cost nothing. Phone browsers pause timers when the screen locks —
+     so we also tick on visibilitychange when the tab comes back. */
   const ticking = useRef(false);
   useEffect(() => {
     let stopped = false;
@@ -39,7 +39,15 @@ export default function Dashboard({ user, onUserChange, onHome, onLogout }) {
     };
     tick();
     const id = setInterval(tick, 60_000);
-    return () => { stopped = true; clearInterval(id); };
+    const onVis = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

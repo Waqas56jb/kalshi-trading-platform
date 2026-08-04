@@ -542,8 +542,9 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        is enough to catch the day's settlements on a 60-second tick. */
     const settled = await syncSettlements(kalshi, { maxPages: 3 })
       .catch(() => ({ updated: 0 }));
-    /* Set scores for settled matches (Kalshi only gives yes/no). */
-    const scores = await syncMatchScores({ daysBack: 4 })
+    /* Set scores — small budget; a big score pass was pushing sync past Vercel's
+       60s kill and leaving the desk stale for an hour. */
+    const scores = await syncMatchScores({ limit: 8 })
       .catch(e => ({ error: String(e.message).slice(0, 120) }));
 
     /* Shadow trading, run here rather than on its own timer so the risk engine
@@ -620,6 +621,9 @@ export async function runSync(kalshi, { verbose = false } = {}) {
  * process-local flag would let them all sync at once.
  */
 export async function maybeAutoSync(kalshi, { maxAgeSeconds = 60 } = {}) {
+  /* Vercel kills at 60s — orphaned "running" rows used to block ticks. */
+  await reapStaleRuns().catch(() => 0);
+
   const r = await query(
     `select
        (select count(*) from ${t('sync_runs')}

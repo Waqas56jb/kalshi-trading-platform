@@ -247,7 +247,8 @@ export async function listTrades({ filter = 'all', limit = 200 } = {}) {
     `select tr.*, (${DESK_PNL})::numeric as desk_pnl_usd,
             m.result as market_result,
             m.status as market_status,
-            m.settled_at as market_settled_at
+            m.settled_at as market_settled_at,
+            m.final_score as match_score
      from ${t('trades')} tr
      left join ${t('markets')} m on m.ticker = tr.ticker
      where tr.archived_at is null and case $1

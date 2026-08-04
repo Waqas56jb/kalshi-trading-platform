@@ -515,16 +515,18 @@ export function createApp() {
     /* Newest first — ranking by edge buried today's engine activity under older
        high-edge rows, which made the desk look 24h out of date. */
     const r = await query(
-      `select ticker, player_name, opponent_name, side, utr_gap, utr_bracket,
-              model_probability, market_reference, conservative_prob,
-              best_ask_cents, expected_vwap_cents, max_price_cents, book_depth_levels,
-              approved, net_edge, expected_roi, full_kelly, kelly_multiplier,
-              base_cap_fraction, edge_scaling_mult, effective_cap, throttle_multiplier,
-              stake_usd, contracts, limiting_constraint, rejection_reason,
-              result, pnl_usd, match_date, created_at
-       from ${t('shadow_trades')}
-       where archived_at is null ${filter}
-       order by created_at desc
+      `select st.ticker, st.player_name, st.opponent_name, st.side, st.utr_gap, st.utr_bracket,
+              st.model_probability, st.market_reference, st.conservative_prob,
+              st.best_ask_cents, st.expected_vwap_cents, st.max_price_cents, st.book_depth_levels,
+              st.approved, st.net_edge, st.expected_roi, st.full_kelly, st.kelly_multiplier,
+              st.base_cap_fraction, st.edge_scaling_mult, st.effective_cap, st.throttle_multiplier,
+              st.stake_usd, st.contracts, st.limiting_constraint, st.rejection_reason,
+              st.result, st.pnl_usd, st.match_date, st.created_at,
+              m.final_score as match_score
+       from ${t('shadow_trades')} st
+       left join ${t('markets')} m on m.ticker = st.ticker
+       where st.archived_at is null ${filter}
+       order by st.created_at desc
        limit $1`, [limit]);
     res.json({ decisions: r.rows, deskSince: NEW_FORMULA_SINCE });
   }));

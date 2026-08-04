@@ -4,6 +4,7 @@ import { snapshotPortfolio, autoSellAtFair } from './orders.js';
 import { importKalshiHistory } from './importer.js';
 import { backfillRatings, scrubUnusableRatings } from './ratings.js';
 import { syncSettlements } from './settlements.js';
+import { syncMatchScores } from './scores.js';
 import {
   runShadowCycle, settleShadowTrades, archivePreNewFormulaDesk, paperReplayWrongHolds,
 } from './shadow.js';
@@ -541,6 +542,9 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        is enough to catch the day's settlements on a 60-second tick. */
     const settled = await syncSettlements(kalshi, { maxPages: 3 })
       .catch(() => ({ updated: 0 }));
+    /* Set scores for settled matches (Kalshi only gives yes/no). */
+    const scores = await syncMatchScores({ daysBack: 4 })
+      .catch(e => ({ error: String(e.message).slice(0, 120) }));
 
     /* Shadow trading, run here rather than on its own timer so the risk engine
        sees signals seconds old rather than a minute old. Its staleness gate is
@@ -595,7 +599,7 @@ export async function runSync(kalshi, { verbose = false } = {}) {
         `shadow=${shadow.approved ?? 0}/${shadow.evaluated ?? 0} ${latency}ms`);
     }
     return {
-      ok: true, runId, latency, marketsSeen: rows.length, ...out, exits, settled, shadow, replay,
+      ok: true, runId, latency, marketsSeen: rows.length, ...out, exits, settled, scores, shadow, replay,
     };
   } catch (e) {
     await query(

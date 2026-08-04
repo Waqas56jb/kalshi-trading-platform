@@ -181,7 +181,8 @@ export default function Shadow() {
                 <Th>Player</Th><Th>Bracket</Th><Th right>Ask</Th><Th right>Model</Th>
                 <Th right>Shrunk</Th><Th right>Edge</Th><Th right>ROI</Th>
                 <Th right>{tab === 'placed' ? 'Stake' : ''}</Th>
-                <Th>{tab === 'placed' ? 'Limited by' : 'Why not'}</Th>
+                <Th>{tab === 'placed' ? 'Result' : 'Why not'}</Th>
+                {tab === 'placed' && <Th>Score</Th>}
               </tr>
             </thead>
             <tbody>
@@ -200,13 +201,21 @@ export default function Shadow() {
                   <Td right>{tab === 'placed' ? fmtUsd(d.stake_usd) : ''}</Td>
                   <Td>
                     <span className="text-muted text-[12px]">
-                      {tab === 'placed' ? d.limiting_constraint : d.rejection_reason}
+                      {tab === 'placed'
+                        ? (d.result ? `${String(d.result).toUpperCase()}${d.limiting_constraint ? ` · ${d.limiting_constraint}` : ''}`
+                          : (d.limiting_constraint ?? '—'))
+                        : d.rejection_reason}
                     </span>
                   </Td>
+                  {tab === 'placed' && (
+                    <Td>
+                      <span className="font-mono text-[12px] text-muted">{d.match_score || '—'}</span>
+                    </Td>
+                  )}
                 </tr>
               ))}
               {!rows.length && (
-                <tr><Td colSpan={9}>
+                <tr><Td colSpan={tab === 'placed' ? 10 : 9}>
                   <span className="text-muted">
                     {tab === 'placed' ? 'Nothing has cleared the risk rules yet.' : 'Nothing held back.'}
                   </span>

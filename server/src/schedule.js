@@ -60,7 +60,27 @@ export async function probe(date = todayUtc()) {
   return out;
 }
 
-/** Every tennis match Sofascore lists for a day, flattened. */
+/** "6-4 6-3" from Sofascore period scores; null if not finished / incomplete. */
+export function formatTennisScore(homeScore, awayScore) {
+  if (!homeScore || !awayScore) return null;
+  const sets = [];
+  for (let i = 1; i <= 5; i += 1) {
+    const h = homeScore[`period${i}`];
+    const a = awayScore[`period${i}`];
+    if (h == null || a == null) break;
+    if (!Number.isFinite(Number(h)) || !Number.isFinite(Number(a))) break;
+    sets.push(`${Number(h)}-${Number(a)}`);
+  }
+  if (sets.length) return sets.join(' ');
+  const hc = homeScore.current ?? homeScore.display;
+  const ac = awayScore.current ?? awayScore.display;
+  if (hc != null && ac != null && Number.isFinite(Number(hc)) && Number.isFinite(Number(ac))) {
+    return `${Number(hc)}-${Number(ac)} sets`;
+  }
+  return null;
+}
+
+/** Every tennis match Sofascore lists for a day, flattened (incl. set scores). */
 export async function fetchSchedule(date = todayUtc()) {
   let lastErr = 'no host tried';
   for (const host of HOSTS) {
@@ -72,6 +92,7 @@ export async function fetchSchedule(date = todayUtc()) {
         startsAt: e.startTimestamp ? new Date(e.startTimestamp * 1000).toISOString() : null,
         status: e.status?.type ?? null,
         tournament: e.tournament?.name ?? '',
+        score: formatTennisScore(e.homeScore, e.awayScore),
       })).filter(e => e.startsAt && e.home && e.away);
       return { ok: true, host, events };
     } catch (e) {

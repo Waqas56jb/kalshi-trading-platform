@@ -106,7 +106,8 @@ export default function Trades({ user }) {
             <thead>
               <tr>
                 <th>Placed</th><th>Mode</th><th>Player</th><th>Side</th><th>Entry</th><th>Fair</th>
-                <th>Size</th><th>Stake</th><th>Exit</th><th>Status</th><th>Result</th><th>P&amp;L</th><th />
+                <th>Size</th><th>Stake</th><th>Exit</th><th>Status</th><th>Result</th><th>Score</th>
+                <th>P&amp;L</th><th />
               </tr>
             </thead>
             <tbody>
@@ -146,6 +147,9 @@ export default function Trades({ user }) {
                       {t.result === 'lost' && <Tag className="bg-down/15 text-down">LOST</Tag>}
                       {t.result === 'void' && <Tag className="bg-muted/12 text-muted">VOID</Tag>}
                       {!t.result && <span className="text-muted2">—</span>}
+                    </td>
+                    <td className="font-mono text-[12.5px] text-muted whitespace-nowrap">
+                      {t.match_score || '—'}
                     </td>
                     <td className={`font-mono font-semibold ${
                       Number(t.desk_pnl_usd ?? t.pnl_usd) > 0 ? 'text-up'

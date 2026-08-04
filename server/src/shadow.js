@@ -84,10 +84,11 @@ export async function loadRiskConfig() {
     crossMarketMinEdge: n(s.cross_market_min_edge, 0.015),
     crossMarketMinBooks: n(s.cross_market_min_books, 1),
     crossMarketMaxSpread: n(s.cross_market_max_spread, 0.12),
-    /* ITF often has no line until near first serve. Allow a reduced stake so
-       early-round volume is not zero; full size only when books confirm. */
+    /* ITF books are almost always late — Max: no useful volume on confirmed
+       path, so missing / non-confirming books size at full stake (was 65%).
+       When books do confirm, stake stays 100% as before. */
     crossMarketAllowMissing: s.cross_market_allow_missing !== false,
-    crossMarketMissingStakeMult: n(s.cross_market_missing_stake_mult, 0.65),
+    crossMarketMissingStakeMult: n(s.cross_market_missing_stake_mult, 1.0),
 
     maxBookParticipation: n(s.max_book_participation, 0.12),
     maxSignalAgeSeconds: n(s.max_signal_age_seconds, 120),

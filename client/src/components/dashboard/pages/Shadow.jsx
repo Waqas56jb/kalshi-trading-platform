@@ -61,7 +61,7 @@ export default function Shadow() {
       <div className="mb-5 rounded-card border border-line2 bg-panel p-3.5 text-[12.5px] text-muted">
         Buys use the <span className="text-text">ask only</span> (bid / spread irrelevant, pre-match).
         Floor is on <span className="text-text">model fair ≥ {mode?.minPriceCents ?? 25}¢</span> — not a minimum ask.
-        Odds checker is a <span className="text-text">size upgrade</span>, not a wait.
+        Odds checker is optional on ITF — full stake with or without books (was 65% without).
         The 35–50¢ row below is reporting only.
       </div>
 

@@ -491,9 +491,15 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     /* Zero pre-new-formula placed P&L (old 6) and apply looser volume settings. */
     await archivePreNewFormulaDesk().catch(() => null);
     await query(
+      `alter table ${t('settings')}
+         add column if not exists cross_market_missing_stake_mult numeric(4,3) not null default 1.0`,
+    ).catch(() => null);
+    await query(
       `update ${t('settings')} set
          cross_market_min_edge = least(coalesce(cross_market_min_edge, 0.03), 0.015),
          cross_market_min_books = least(coalesce(cross_market_min_books, 2), 1),
+         /* Max: ITF odds too late — full stake without book confirm (was 0.65). */
+         cross_market_missing_stake_mult = 1.0,
          min_net_edge = least(coalesce(min_net_edge, 0.04), 0.03),
          min_roi = least(coalesce(min_roi, 0.10), 0.08),
          sub10_min_roi = least(coalesce(sub10_min_roi, 0.30), 0.20),

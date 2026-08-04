@@ -889,19 +889,24 @@ const ODDS_FEED_LIVE_SINCE = '2026-08-02T13:00:00Z';
  * archived out of the Shadow headline numbers (the old 6 and earlier paper).
  * Held-back diagnostics stay visible.
  */
-/* Desk scoreboard starts Aug 4 UTC — wipes Aug 3 and earlier Lost/Won from the UI. */
-export const NEW_FORMULA_SINCE = '2026-08-04T00:00:00Z';
+/* Desk scoreboard: new-formula evening session. Was Aug 4 00:00 UTC, which
+   archived every placement while it was still Aug 3 UTC — Max saw 0 placed. */
+export const NEW_FORMULA_SINCE = '2026-08-03T18:00:00Z';
 
 /** Ensures archive column exists (prod may not have run the SQL migration yet). */
 async function ensureShadowArchiveColumn() {
   await query(
     `alter table ${t('shadow_trades')}
        add column if not exists archived_at timestamptz`).catch(() => null);
+  await query(
+    `alter table ${t('trades')}
+       add column if not exists archived_at timestamptz`).catch(() => null);
 }
 
 /**
  * Archives pre-new-formula shadow placements and ALL ledger fills from before
  * the era (paper or live) so Trade history Lost/Won and desk P&L restart clean.
+ * Also un-archives rows that were wrongly buried by the Aug-4-UTC cutoff.
  * Idempotent.
  */
 export async function archivePreNewFormulaDesk() {
@@ -920,9 +925,25 @@ export async function archivePreNewFormulaDesk() {
        and placed_at < $1::timestamptz
      returning id`,
     [NEW_FORMULA_SINCE]);
+  /* Rescue placements from tonight that the Aug-4 UTC cutoff buried. */
+  const rescuedShadow = await query(
+    `update ${t('shadow_trades')} set archived_at = null
+     where archived_at is not null
+       and approved
+       and created_at >= $1::timestamptz
+     returning ticker`,
+    [NEW_FORMULA_SINCE]);
+  const rescuedTrades = await query(
+    `update ${t('trades')} set archived_at = null
+     where archived_at is not null
+       and placed_at >= $1::timestamptz
+     returning id`,
+    [NEW_FORMULA_SINCE]);
   return {
     shadowArchived: shadow.rowCount ?? 0,
     tradesArchived: trades.rowCount ?? 0,
+    shadowRescued: rescuedShadow.rowCount ?? 0,
+    tradesRescued: rescuedTrades.rowCount ?? 0,
     since: NEW_FORMULA_SINCE,
   };
 }

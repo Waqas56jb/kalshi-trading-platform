@@ -162,6 +162,54 @@ export function parseOddsSummary(payload) {
 }
 
 /**
+ * Final / live set score from the Live API side of the same RapidAPI product.
+ *
+ *   GET /tennis/v2/extend/api/event/get/{player1}/{player2}/{YYYY-MM-DD}
+ *
+ * Returns e.g. `{ score: "6-4 6-3", status: "Ended", p1, p2 }` or null.
+ * Score is oriented to participant1–participant2 (API order).
+ */
+export async function scoreForMatch(playerName, opponentName, dateOnly) {
+  if (!oddsFeedConfigured() || !playerName || !opponentName || !dateOnly) return null;
+
+  const tryOrder = async (a, b) => {
+    const path = `/tennis/v2/extend/api/event/get/`
+      + `${encodeURIComponent(a)}/${encodeURIComponent(b)}/${encodeURIComponent(dateOnly)}`;
+    try {
+      const j = await fetchJson(path);
+      const r = j?.result ?? j?.data ?? null;
+      if (!r) return null;
+      const raw = r.score ?? r.result ?? null;
+      if (!raw || typeof raw !== 'string') return null;
+      /* "7-6,6-1" or "6-4 6-3" → space-separated; drop trailing empty sets. */
+      const score = String(raw)
+        .replace(/,/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(' ')
+        .filter(set => {
+          const [x, y] = set.split('-').map(Number);
+          return Number.isFinite(x) && Number.isFinite(y) && !(x === 0 && y === 0);
+        })
+        .join(' ');
+      if (!score) return null;
+      return {
+        score,
+        status: r.status ?? null,
+        p1: r.participant1 ?? a,
+        p2: r.participant2 ?? b,
+        eventId: r.id ?? null,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  return (await tryOrder(playerName, opponentName))
+    ?? (await tryOrder(opponentName, playerName));
+}
+
+/**
  * Bookmaker quotes for one Kalshi market's player, or null when the books
  * have nothing — no fixture matched, or no odds posted yet.
  *

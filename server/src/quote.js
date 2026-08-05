@@ -6,8 +6,8 @@
  * real ask that already beats our fair.
  */
 
-/** Ask outside this band is not a serious pre-match buy for the desk. */
-export const MIN_BUY_ASK_CENTS = 12;
+/** Ask band: Robbie/Max Aug 5 — cut big underdogs (<35¢); keep 35–50 and favs. */
+export const MIN_BUY_ASK_CENTS = 35;
 export const MAX_BUY_ASK_CENTS = 85;
 
 /** Kept for sync/review callers that still classify empty books. */
@@ -65,5 +65,5 @@ export const QUOTE_REASONS = {
   spread_not_a_market: 'Ask not tradable',
   placeholder_quote: 'Placeholder ask (≥90¢) — not a buy',
   degenerate_price: 'Ask is at the boundary',
-  ask_out_of_band: 'Ask outside the 12–85¢ buy band',
+  ask_out_of_band: 'Ask outside the 35–85¢ buy band (no big underdogs)',
 };

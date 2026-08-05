@@ -317,12 +317,19 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
   const bestAsk = Math.min(...asks.filter(l => l.contracts > 0).map(l => l.price));
   if (!Number.isFinite(bestAsk)) return reject('No executable ask liquidity.', 'order book', base);
 
-  /* Fair-value floor (Max): require model fair ≥ 25¢ — not a minimum ask.
-     Cheap asks against a real favourite are fine; longshot fairs are not. */
+  /* Desk floor (Robbie/Max): no big underdogs — ask and fair both ≥ 35¢.
+     Keeps the 35–50¢ band and favourites; cuts the <35¢ longshot bucket. */
+  const askCents = Math.round(bestAsk * 100);
   const fairCents = Math.round((opp.modelProbability ?? 0) * 100);
-  if (fairCents < cfg.minPriceCents) {
+  const floor = cfg.minPriceCents ?? 35;
+  if (askCents < floor) {
     return reject(
-      `Model fair ${fairCents}c is below the ${cfg.minPriceCents}c fair-value floor.`,
+      `Best ask ${askCents}c is below the ${floor}c underdog floor.`,
+      'underdog floor', { ...base, bestAsk, fairCents });
+  }
+  if (fairCents < floor) {
+    return reject(
+      `Model fair ${fairCents}c is below the ${floor}c fair-value floor.`,
       'fair floor', { ...base, bestAsk, fairCents });
   }
 

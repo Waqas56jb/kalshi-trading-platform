@@ -486,11 +486,10 @@ export function createApp() {
         autoPlace: cfg.shadowAutoPlace,
         bankroll: cfg.simulatedBankrollCents / 100,
         cashReservePct: Math.round(cfg.minimumFreeCashFraction * 100),
-        /* Min model fair (not min ask) — capped live value from summary. */
-        minPriceCents: summary.floor?.live
-          ?? Math.min(25, Math.max(15, cfg.minPriceCents)),
+        /* Min ask + fair — big underdogs cut at 35¢; 35–50 band kept. */
+        minPriceCents: summary.floor?.live ?? 35,
         floorRaw: summary.floor?.raw ?? null,
-        floorAppliesTo: 'fair',
+        floorAppliesTo: 'ask_and_fair',
         crossMarket: cfg.crossMarketEnabled,
         oddsFeed: oddsFeedConfigured(),
         deskSince: NEW_FORMULA_SINCE,

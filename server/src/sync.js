@@ -508,14 +508,15 @@ export async function runSync(kalshi, { verbose = false } = {}) {
          max_snapshot_age_seconds = greatest(coalesce(max_snapshot_age_seconds, 120), 180),
          model_weight = greatest(coalesce(model_weight, 0.60), 0.75),
          uncertainty_haircut = least(coalesce(uncertainty_haircut, 0.01), 0.005),
-         min_price_cents = least(coalesce(min_price_cents, 25), 25),
+         /* Robbie/Max: eliminate big underdogs — 35¢ ask+fair floor. */
+         min_price_cents = 35,
          /* 150 false-flagged pre-match ITF volume (Kamendje ~163) as in-play. */
          inplay_volume_threshold = greatest(coalesce(inplay_volume_threshold, 150), 1000),
          updated_at = now()
        where id = 1`).catch(() => null);
     await query(
-      `update ${t('derived_limits')} set value = least(value, 25), computed_at = now()
-       where name = 'minimum_price' and value > 25`).catch(() => null);
+      `update ${t('derived_limits')} set value = least(value, 35), computed_at = now()
+       where name = 'minimum_price' and value > 35`).catch(() => null);
 
     const out = await tx(async client => {
       await upsertPlayers(client, rows);

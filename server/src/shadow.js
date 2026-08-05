@@ -76,8 +76,8 @@ export async function loadRiskConfig() {
     minRoi: n(s.min_roi, 0.08),
     sub10MinRoi: n(s.sub10_min_roi, 0.20),
     absoluteMinProbability: n(s.absolute_min_probability, 0.05),
-    /* Minimum model fair (¢), not minimum ask. Derived overlay may adjust. */
-    minPriceCents: n(s.min_price_cents, 25),
+    /* Min ask + min fair (¢). Desk cut big underdogs at 35¢ (was 25¢ fair-only). */
+    minPriceCents: n(s.min_price_cents, 35),
 
     crossMarketEnabled: s.cross_market_enabled === true,
     /* Was 3pp / 2 books — too strict for ITF early rounds. */
@@ -253,14 +253,9 @@ async function shadowPortfolio(cfg) {
 export async function runShadowCycle(kalshi, { verbose = false } = {}) {
   const cfg = await loadRiskConfig();
 
-  /* Fair-value floor (not min ask). Cap derived measure at 25¢ — a 50¢ figure
-     was zeroing volume when it was wrongly applied to the ask. */
-  const limits = await derivedLimits().catch(() => ({}));
-  if (limits.minimum_price?.value != null) {
-    cfg.minPriceCents = Math.min(25, Math.max(15, Math.round(limits.minimum_price.value)));
-  } else {
-    cfg.minPriceCents = Math.min(25, Math.max(15, cfg.minPriceCents ?? 25));
-  }
+  /* Hard underdog floor: ask + fair ≥ 35¢. Derived measure cannot raise this
+     (would wipe Max's 35–50 band) or lower it below 35. */
+  cfg.minPriceCents = 35;
 
   /* Entries are pre-match only — the client's rule, and the model's too: the
      UTR signal is a pre-match estimate that says nothing about a match in
@@ -298,9 +293,10 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
 
   if (!candidates.length) return { evaluated: 0, approved: 0, rejected: 0 };
 
-  /* Depth for tickets that clear the fair floor + raw edge. Ask may be cheap. */
+  /* Depth for tickets that clear the 35¢ underdog floor + raw edge. */
   const worthFetching = candidates
     .filter(c => c.fair_cents >= cfg.minPriceCents
+      && c.yes_ask_cents >= cfg.minPriceCents
       && (c.fair_cents - c.market_cents) >= Math.round(cfg.minNetEdge * 100))
     .map(c => c.ticker);
   const worthSet = new Set(worthFetching);
@@ -693,7 +689,7 @@ async function recordDecisions(decisions, cfg) {
    Includes the Aug-4 wrong gates so the 488-hold day teaches the DB. */
 const LEARNING_CONSTRAINTS = [
   'cross-market data', 'cross-market edge', 'supporting books', 'consensus dispersion',
-  'no real market', 'price floor', 'fair floor',
+  'no real market', 'price floor', 'fair floor', 'underdog floor',
 ];
 
 export async function settleShadowTrades() {
@@ -735,12 +731,12 @@ export async function settleShadowTrades() {
 export async function paperReplayWrongHolds({ hours = 72, stakeUsd = 20, limit = 500 } = {}) {
   await ensureShadowArchiveColumn();
   const cfg = await loadRiskConfig();
-  const fairFloor = Math.min(25, Math.max(15, cfg.minPriceCents ?? 25));
+  const fairFloor = Math.max(35, cfg.minPriceCents ?? 35);
 
   /* Permanent holds the new formula still rejects — never paper-force these. */
   const permanent = [
     'utr not rated', 'match in play', 'verify name (Δ≥2)', 'market disagrees',
-    'system health', 'probability floor', 'fair floor',
+    'system health', 'probability floor', 'fair floor', 'underdog floor',
   ];
 
   const { rows } = await query(
@@ -760,7 +756,7 @@ export async function paperReplayWrongHolds({ hours = 72, stakeUsd = 20, limit =
        and st.approved = false
        and st.result is null
        and st.created_at > now() - ($1 || ' hours')::interval
-       and st.best_ask_cents between 12 and 85
+       and st.best_ask_cents between 35 and 85
        and coalesce(s.fair_cents, round(st.model_probability * 100)) >= $2
        and coalesce(s.fair_cents, round(st.model_probability * 100))
              >= st.best_ask_cents + 3
@@ -1066,21 +1062,21 @@ export async function shadowSummary() {
   const limits = await derivedLimits().catch(() => ({}));
   const rawFloor = limits.minimum_price?.value != null
     ? Math.round(Number(limits.minimum_price.value)) : null;
-  const liveFloor = rawFloor != null ? Math.min(25, Math.max(15, rawFloor)) : 25;
+  const liveFloor = 35;
   const spreadHolds = reasons.rows
     .filter(r => /spread/i.test(r.rejection_reason || '')
       || /spread/i.test(r.limiting_constraint || ''))
     .reduce((n, r) => n + Number(r.n), 0);
   const floorHolds = reasons.rows
-    .filter(r => /fair floor|price floor/i.test(r.limiting_constraint || '')
-      || /fair-value floor|below the .*floor/i.test(r.rejection_reason || ''))
+    .filter(r => /fair floor|price floor|underdog floor/i.test(r.limiting_constraint || '')
+      || /fair-value floor|underdog floor|below the .*floor/i.test(r.rejection_reason || ''))
     .reduce((n, r) => n + Number(r.n), 0);
   const monitors = [];
-  if (rawFloor != null && rawFloor > 25) {
+  if (rawFloor != null && rawFloor > 35) {
     monitors.push({
       id: 'floor_uncapped',
       severity: 'error',
-      message: `Derived fair floor tried ${rawFloor}¢ (live capped at ${liveFloor}¢).`,
+      message: `Derived floor tried ${rawFloor}¢ (live hard floor ${liveFloor}¢ — 35–50 band protected).`,
     });
   }
   if (spreadHolds > 0) {
@@ -1090,11 +1086,11 @@ export async function shadowSummary() {
       message: `${spreadHolds} hold(s) in last 12h still cite spread — buy path should be ask-only.`,
     });
   }
-  if (floorHolds > 0 && liveFloor >= 25) {
+  if (floorHolds > 0) {
     monitors.push({
       id: 'floor_holds',
       severity: 'warn',
-      message: `${floorHolds} fair-floor hold(s) in last 12h (min model fair ${liveFloor}¢).`,
+      message: `${floorHolds} underdog/fair-floor hold(s) in last 12h (min ask+fair ${liveFloor}¢).`,
     });
   }
 
@@ -1140,7 +1136,7 @@ export async function shadowSummary() {
       return +((dogs / total) * 100).toFixed(1);
     })(),
     monitors,
-    floor: { raw: rawFloor, live: liveFloor, cappedAt: 25, appliesTo: 'fair' },
+    floor: { raw: rawFloor, live: liveFloor, cappedAt: 35, appliesTo: 'ask_and_fair' },
   };
 }
 

@@ -8,15 +8,25 @@ import { COMMON_SURNAMES, genderForSeries, lookupPlayer } from './utr.js';
  * Players are looked up at most once until `retryFailed` is passed, so a repeat
  * run is cheap and only picks up newly discovered competitors.
  */
+async function ensureUtr3mColumn() {
+  await query(
+    `alter table ${t('players')}
+       add column if not exists utr_3m numeric(5,2)`,
+  ).catch(() => null);
+}
+
 export async function backfillRatings({
   limit = 500, delayMs = 260, retryFailed = false, staleDays = 7, onProgress,
 } = {}) {
+  await ensureUtr3mColumn();
   /* Never-attempted players first, and nobody twice within twelve hours.
      Without the cooldown, players UTR reports as Unrated keep utr = null and
      requalify every sync, so the same dozen swallowed the whole per-cycle
      budget while freshly listed players never got looked up at all — whole
      tournaments showing no fair value. Failed lookups retry on their own
-     after three days; profiles do appear later for new players. */
+     after three days; profiles do appear later for new players.
+     Rated rows missing utr_3m also re-qualify (same 12h cooldown) so the
+     50/50 blend can populate after deploy. */
   const rows = await query(
     `select competitor_id, name, series_ticker from (
        select distinct on (p.competitor_id)
@@ -25,6 +35,7 @@ export async function backfillRatings({
        join ${t('markets')} m on m.competitor_id = p.competitor_id
        where (
                p.utr is null
+               or p.utr_3m is null
                or p.utr_updated_at < now() - ($2 || ' days')::interval
              )
          and ($3 or p.lookup_attempted_at is null or p.lookup_failed = false
@@ -57,16 +68,20 @@ export async function backfillRatings({
       // reach fair value. Robbie/Max: verified Rated only, with a checkmark.
       const usable = hit.utr != null && hit.utr_status === 'Rated';
       if (usable) stats.rated++; else stats.unrated++;
+      /* If UTR omits threeMonthRating, mirror singles so we stop re-fetching
+         and the blend degrades to 100% singles for that player. */
+      const utr3m = usable ? (hit.utr_3m ?? hit.utr) : null;
 
       await query(
         `update ${t('players')} set
-           utr = $2, utr_doubles = $3, utr_status = $4, utr_player_id = $5,
-           utr_matched_name = $6, utr_match_score = $7, utr_nationality = $8,
+           utr = $2, utr_3m = $3, utr_doubles = $4, utr_status = $5, utr_player_id = $6,
+           utr_matched_name = $7, utr_match_score = $8, utr_nationality = $9,
            utr_source = 'utrsports.net', utr_updated_at = now(),
            lookup_attempted_at = now(), lookup_failed = false
          where competitor_id = $1`,
         [p.competitor_id,
           usable ? hit.utr : null,
+          utr3m,
           hit.utr_doubles, hit.utr_status, hit.utr_player_id,
           hit.utr_matched_name, hit.utr_match_score, hit.utr_nationality],
       );

@@ -240,10 +240,13 @@ export async function lookupPlayer(name, {
 
   const h = best.hit;
   const utr = h.singlesUtr != null ? Number(h.singlesUtr) : null;
+  /* 90-day rolling UTR — desk blends 50/50 with singles for fair value. */
+  const utr3m = h.threeMonthRating != null ? Number(h.threeMonthRating) : null;
 
   return {
     utr_player_id: String(h.id ?? h.profileId ?? ''),
     utr: Number.isFinite(utr) && utr > 0 ? +utr.toFixed(2) : null,
+    utr_3m: Number.isFinite(utr3m) && utr3m > 0 ? +utr3m.toFixed(2) : null,
     utr_doubles: h.doublesUtr != null && Number(h.doublesUtr) > 0 ? +Number(h.doublesUtr).toFixed(2) : null,
     utr_status: h.ratingStatusSingles ?? null,
     utr_matched_name: h.displayName ?? null,

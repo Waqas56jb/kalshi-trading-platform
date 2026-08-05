@@ -62,6 +62,7 @@ export default function Shadow() {
         Buys use the <span className="text-text">ask only</span> (bid / spread irrelevant, pre-match).
         No big underdogs: <span className="text-text">ask and fair ≥ {mode?.minPriceCents ?? 35}¢</span>
         {' '}— 35–50¢ band and favourites stay in.
+        Fair gap is <span className="text-text">50% singles UTR + 50% 3-month UTR</span>.
         Odds checker is optional on ITF — full stake with or without books.
       </div>
 

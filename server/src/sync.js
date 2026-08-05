@@ -222,11 +222,15 @@ async function computeSignals(client, rows, settings) {
   const curve = await loadUtrCurve().catch(() => []);
   const slope = await loadUtrSlope().catch(() => null);
 
+  await client.query(
+    `alter table ${t('players')} add column if not exists utr_3m numeric(5,2)`,
+  ).catch(() => null);
+
   const ids = [...new Set(rows.map(r => r.competitor_id).filter(Boolean))];
   const players = new Map();
   if (ids.length) {
     const p = await client.query(
-      `select competitor_id, name, utr, utr_status, utr_matched_name, utr_match_score
+      `select competitor_id, name, utr, utr_3m, utr_status, utr_matched_name, utr_match_score
          from ${t('players')} where competitor_id = any($1::text[])`, [ids]);
     for (const r of p.rows) players.set(r.competitor_id, r);
   }
@@ -487,7 +491,8 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     /* Drop Projected / weak-match numbers so the tighter lookup can re-resolve
        (wrong Kuznetsova / low Dreycopp-style junk left from older matching). */
     await scrubUnusableRatings().catch(() => null);
-    await backfillRatings({ limit: 40, delayMs: 120 }).catch(() => null);
+    /* Higher limit while utr_3m backfills for the 50/50 blend (was 40). */
+    await backfillRatings({ limit: 80, delayMs: 100 }).catch(() => null);
 
     /* Zero pre-new-formula placed P&L (old 6) and apply looser volume settings. */
     await archivePreNewFormulaDesk().catch(() => null);

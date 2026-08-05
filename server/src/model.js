@@ -201,23 +201,46 @@ export function midPrice(m) {
 }
 
 /**
+ * Desk blend (Robbie/Max Aug 5): half weight on normal (singles) UTR, half on
+ * the 3-month / 90-day rolling UTR. Falls back to singles when 3m is missing
+ * so we still price rather than invent a trend.
+ */
+export const UTR_SINGLES_WEIGHT = 0.5;
+export const UTR_3M_WEIGHT = 0.5;
+
+export function blendUtr(singles, threeMonth) {
+  if (singles == null || !Number.isFinite(singles)) return null;
+  if (threeMonth == null || !Number.isFinite(threeMonth) || threeMonth <= 0) {
+    return +Number(singles).toFixed(2);
+  }
+  return +((UTR_SINGLES_WEIGHT * singles) + (UTR_3M_WEIGHT * threeMonth)).toFixed(2);
+}
+
+/**
  * Builds signals for the two markets of one event.
- * `players` maps competitor_id -> { name, utr, utr_status }.
+ * `players` maps competitor_id -> { name, utr, utr_3m, utr_status }.
  * Only Rated UTRs price a market — Projected numbers are treated as unrated.
  */
 export function buildSignalsForEvent(markets, players, curve = null, logisticK = null) {
   if (markets.length !== 2) return [];       // only head-to-head binaries are modelled
 
-  const ratedUtr = (p) => (
+  const ratedSingles = (p) => (
     p?.utr != null && p.utr_status === 'Rated' ? Number(p.utr) : null
   );
+  const rated3m = (p) => {
+    if (p?.utr_status !== 'Rated') return null;
+    const v = p?.utr_3m != null ? Number(p.utr_3m) : null;
+    return Number.isFinite(v) && v > 0 ? v : null;
+  };
 
   return markets.map((m, i) => {
     const opp = markets[1 - i];
     const me = players.get(m.competitor_id);
     const you = players.get(opp.competitor_id);
-    const myUtr = ratedUtr(me);
-    const oppUtr = ratedUtr(you);
+    const mySingles = ratedSingles(me);
+    const oppSingles = ratedSingles(you);
+    const myUtr = blendUtr(mySingles, rated3m(me));
+    const oppUtr = blendUtr(oppSingles, rated3m(you));
 
     const gap = myUtr != null && oppUtr != null ? +(myUtr - oppUtr).toFixed(2) : null;
     /* Pricing preference, best evidence first: the smooth logistic fitted to
@@ -238,13 +261,14 @@ export function buildSignalsForEvent(markets, players, curve = null, logisticK =
       event_ticker: m.event_ticker,
       player_name: m.player_name,
       opponent_name: opp.player_name,
+      /* Stored UTRs are the blended values used for the gap / fair. */
       player_utr: myUtr,
       opponent_utr: oppUtr,
       utr_gap: gap,
       fair_cents: fair,
       market_cents: price,
       ev_pct: ev,
-      model: 'utr_gap_v1',
+      model: 'utr_blend_50_3m',
     };
   });
 }

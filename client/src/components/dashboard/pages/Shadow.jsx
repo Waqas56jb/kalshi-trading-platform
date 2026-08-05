@@ -63,8 +63,21 @@ export default function Shadow() {
         No big underdogs: <span className="text-text">ask and fair ≥ {mode?.minPriceCents ?? 35}¢</span>
         {' '}— 35–50¢ band and favourites stay in.
         Fair gap is <span className="text-text">50% singles UTR + 50% 3-month UTR</span>.
+        Both players need <span className="text-text">&gt;{s?.minUtrMatches12m ?? 15} UTR singles matches</span>
+        {' '}(last year on profile) or we hold.
         Odds checker is optional on ITF — full stake with or without books.
       </div>
+
+      {s?.formulaAdapt && (
+        <div className="mb-5 rounded-card border border-line2 bg-panel p-3.5 text-[12.5px] text-muted">
+          <span className="text-text font-semibold">Formula adapt:</span>{' '}
+          {s.formulaAdapt.status === 'ready_to_review' ? (
+            <span className="text-amber">{s.formulaAdapt.note}</span>
+          ) : (
+            <>{s.formulaAdapt.note} Need ≥{s.formulaAdapt.minSettledPerBand} settled per band.</>
+          )}
+        </div>
+      )}
 
       {(s?.monitors?.length > 0) && (
         <div className="mb-5 rounded-card border border-danger/40 bg-danger/10 p-3.5 text-[12.5px]">
@@ -72,7 +85,7 @@ export default function Shadow() {
           <ul className="space-y-1 text-muted">
             {s.monitors.map(m => (
               <li key={m.id}>
-                <span className={m.severity === 'error' ? 'text-danger' : 'text-amber'}>
+                <span className={m.severity === 'error' ? 'text-danger' : m.severity === 'info' ? 'text-muted' : 'text-amber'}>
                   {m.severity === 'error' ? '●' : '○'}
                 </span>
                 {' '}{m.message}

@@ -2,6 +2,7 @@ import { config, t } from './config.js';
 import { query } from './db.js';
 import { looksInPlay } from './model.js';
 import { evaluateBet, kalshiFeeRate, probabilityBucket, utrBracket } from './risk.js';
+import { MIN_UTR_MATCHES_12M } from './utr.js';
 import { calibrationMap, derivedLimits } from './calibration.js';
 import { bookConsensus } from './crossmarket.js';
 import { marketProbability, QUOTE_REASONS } from './quote.js';
@@ -267,6 +268,11 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
        3. scheduled_at — when a real schedule source gave us the exact start
           time, never enter at or after it. Only 'exact' is trusted; Kalshi's
           placeholder slots are date guesses, not start times. */
+  await query(
+    `alter table ${t('players')}
+       add column if not exists utr_matches_12m integer`,
+  ).catch(() => null);
+
   const { rows: candidates } = await query(
     `select m.ticker, m.event_ticker, m.player_name, m.competitor_id,
             m.yes_ask_cents, m.yes_bid_cents, m.yes_ask_size, m.match_date, m.status,
@@ -274,7 +280,9 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
             opp.yes_ask_cents as opponent_ask, opp.yes_bid_cents as opponent_bid,
             s.fair_cents, s.market_cents, s.utr_gap, s.side_type, s.opponent_name,
             s.model, s.computed_at, s.is_actionable, s.review_reason,
-            p.utr_status, p.utr_match_score, p.utr_matched_name,
+            p.utr_status, p.utr_match_score, p.utr_matched_name, p.utr_matches_12m,
+            op.utr_matches_12m as opponent_utr_matches_12m,
+            op.utr_status as opponent_utr_status,
             opp.ticker as opponent_ticker
      from ${t('markets')} m
      join ${t('signals')} s on s.ticker = m.ticker
@@ -282,6 +290,7 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
      left join ${t('players')} p on p.competitor_id = m.competitor_id
      left join ${t('markets')} opp
        on opp.event_ticker = m.event_ticker and opp.ticker <> m.ticker
+     left join ${t('players')} op on op.competitor_id = opp.competitor_id
      where m.status in ('active','open','initialized')
        and s.fair_cents is not null
        and m.yes_ask_cents is not null
@@ -444,6 +453,31 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
           contracts: 0,
           limitingConstraint: 'utr not rated',
           rejectionReason: 'UTR is not fully Rated (Projected/Unrated) — no trade until verified.',
+        },
+      });
+      continue;
+    }
+
+    /* Robbie: both players need >15 UTR singles matches in the last year
+       (profile current + prior calendar year). Missing count = hold. */
+    const myMatches = c.utr_matches_12m == null ? null : Number(c.utr_matches_12m);
+    const oppMatches = c.opponent_utr_matches_12m == null ? null : Number(c.opponent_utr_matches_12m);
+    const thinSample = myMatches == null || oppMatches == null
+      || myMatches <= MIN_UTR_MATCHES_12M
+      || oppMatches <= MIN_UTR_MATCHES_12M;
+    if (thinSample) {
+      decisions.push({
+        candidate: c,
+        bestAskCents: c.yes_ask_cents,
+        levels: 0,
+        decision: {
+          approved: false,
+          stakeCents: 0,
+          contracts: 0,
+          limitingConstraint: 'utr sample',
+          rejectionReason: `Need >${MIN_UTR_MATCHES_12M} UTR singles matches (last year) on both sides `
+            + `(${c.player_name}: ${myMatches ?? 'unknown'}, `
+            + `${c.opponent_name}: ${oppMatches ?? 'unknown'}).`,
         },
       });
       continue;
@@ -689,7 +723,7 @@ async function recordDecisions(decisions, cfg) {
    Includes the Aug-4 wrong gates so the 488-hold day teaches the DB. */
 const LEARNING_CONSTRAINTS = [
   'cross-market data', 'cross-market edge', 'supporting books', 'consensus dispersion',
-  'no real market', 'price floor', 'fair floor', 'underdog floor',
+  'no real market', 'price floor', 'fair floor', 'underdog floor', 'utr sample',
 ];
 
 export async function settleShadowTrades() {
@@ -736,7 +770,7 @@ export async function paperReplayWrongHolds({ hours = 72, stakeUsd = 20, limit =
   /* Permanent holds the new formula still rejects — never paper-force these. */
   const permanent = [
     'utr not rated', 'match in play', 'verify name (Δ≥2)', 'market disagrees',
-    'system health', 'probability floor', 'fair floor', 'underdog floor',
+    'system health', 'probability floor', 'fair floor', 'underdog floor', 'utr sample',
   ];
 
   const { rows } = await query(
@@ -1093,6 +1127,47 @@ export async function shadowSummary() {
       message: `${floorHolds} underdog/fair-floor hold(s) in last 12h (min ask+fair ${liveFloor}¢).`,
     });
   }
+  const sampleHolds = reasons.rows
+    .filter(r => /utr sample/i.test(r.limiting_constraint || '')
+      || /UTR singles matches/i.test(r.rejection_reason || ''))
+    .reduce((n, r) => n + Number(r.n), 0);
+  if (sampleHolds > 0) {
+    monitors.push({
+      id: 'utr_sample_holds',
+      severity: 'info',
+      message: `${sampleHolds} hold(s) in last 12h for thin UTR sample (need >${MIN_UTR_MATCHES_12M} matches/side).`,
+    });
+  }
+
+  const bands = priceBands.rows.map(b => ({
+    band: b.band,
+    placed: b.placed,
+    settled: b.settled,
+    won: b.won,
+    winRate: b.settled ? +(b.won / b.settled).toFixed(3) : null,
+    staked: +Number(b.staked).toFixed(2),
+    pnl: +Number(b.pnl).toFixed(2),
+    roi: Number(b.staked) > 0 ? +((Number(b.pnl) / Number(b.staked)) * 100).toFixed(1) : null,
+  }));
+
+  /* Robbie: monitor band ROI; adapt formula later once each band has sample. */
+  const ADAPT_MIN_SETTLED = 50;
+  const readyBands = bands.filter(b => (b.settled ?? 0) >= ADAPT_MIN_SETTLED);
+  const formulaAdapt = {
+    status: readyBands.length >= 2 ? 'ready_to_review' : 'monitoring',
+    minSettledPerBand: ADAPT_MIN_SETTLED,
+    readyBands: readyBands.map(b => b.band),
+    note: readyBands.length >= 2
+      ? 'Enough settled tickets in 2+ bands — review ROI and adapt sizing/edge by band.'
+      : 'Tracking price-band ROI under current formula; no auto-adapt until sample clears.',
+  };
+  if (formulaAdapt.status === 'ready_to_review') {
+    monitors.push({
+      id: 'formula_adapt_ready',
+      severity: 'warn',
+      message: formulaAdapt.note,
+    });
+  }
 
   return {
     placed: o.placed,
@@ -1115,20 +1190,12 @@ export async function shadowSummary() {
       roi: Number(b.staked) > 0 ? +((Number(b.pnl) / Number(b.staked)) * 100).toFixed(1) : null,
     })),
     heldBackReasons: reasons.rows,
-    priceBands: priceBands.rows.map(b => ({
-      band: b.band,
-      placed: b.placed,
-      settled: b.settled,
-      won: b.won,
-      winRate: b.settled ? +(b.won / b.settled).toFixed(3) : null,
-      staked: +Number(b.staked).toFixed(2),
-      pnl: +Number(b.pnl).toFixed(2),
-      roi: Number(b.staked) > 0 ? +((Number(b.pnl) / Number(b.staked)) * 100).toFixed(1) : null,
-    })),
+    priceBands: bands,
+    formulaAdapt,
     /* Share of stake below 50c — the single number that answers "does it tilt
        towards underdogs". */
     underdogStakeShare: (() => {
-      const total = priceBands.rows.reduce((s, b) => s + Number(b.staked), 0);
+      const total = bands.reduce((s, b) => s + Number(b.staked), 0);
       if (!total) return null;
       const dogs = priceBands.rows
         .filter(b => b.ord < 50)
@@ -1137,6 +1204,7 @@ export async function shadowSummary() {
     })(),
     monitors,
     floor: { raw: rawFloor, live: liveFloor, cappedAt: 35, appliesTo: 'ask_and_fair' },
+    minUtrMatches12m: MIN_UTR_MATCHES_12M,
   };
 }
 

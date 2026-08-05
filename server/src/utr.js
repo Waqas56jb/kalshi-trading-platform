@@ -242,17 +242,64 @@ export async function lookupPlayer(name, {
   const utr = h.singlesUtr != null ? Number(h.singlesUtr) : null;
   /* 90-day rolling UTR — desk blends 50/50 with singles for fair value. */
   const utr3m = h.threeMonthRating != null ? Number(h.threeMonthRating) : null;
+  const playerId = h.id ?? h.profileId ?? null;
+  const matches12m = playerId != null
+    ? await fetchSinglesMatchesLastYear(playerId, { signal }).catch(() => null)
+    : null;
 
   return {
-    utr_player_id: String(h.id ?? h.profileId ?? ''),
+    utr_player_id: playerId != null ? String(playerId) : '',
     utr: Number.isFinite(utr) && utr > 0 ? +utr.toFixed(2) : null,
     utr_3m: Number.isFinite(utr3m) && utr3m > 0 ? +utr3m.toFixed(2) : null,
+    utr_matches_12m: matches12m,
     utr_doubles: h.doublesUtr != null && Number(h.doublesUtr) > 0 ? +Number(h.doublesUtr).toFixed(2) : null,
     utr_status: h.ratingStatusSingles ?? null,
     utr_matched_name: h.displayName ?? null,
     utr_match_score: +best.score.toFixed(3),
     utr_nationality: h.nationality ?? null,
   };
+}
+
+/** Robbie/Max: both players need >15 singles results in the last year. */
+export const MIN_UTR_MATCHES_12M = 15;
+
+/**
+ * Sum singles results on the UTR profile for the current + prior calendar year.
+ * Profile only publishes yearly buckets (not a true rolling 12m without auth
+ * stats) — this is the public proxy for "matches in the last year".
+ */
+export function singlesMatchesFromYearBuckets(resultCountsSingles, now = new Date()) {
+  const y = now.getFullYear();
+  let n = 0;
+  for (const row of resultCountsSingles || []) {
+    const year = Number(row.key);
+    const c = Number(row.value) || 0;
+    if (year === y || year === y - 1) n += c;
+  }
+  return n;
+}
+
+/** Public profile → recent singles match count (no auth required). */
+export async function fetchSinglesMatchesLastYear(playerId, { signal } = {}) {
+  if (playerId == null || playerId === '') return null;
+  const url = `https://api.utrsports.net/v1/player/${encodeURIComponent(playerId)}/profile`;
+  const headers = {
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (compatible; CourtEdge/1.0)',
+  };
+  const token = await utrToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(url, { signal, headers });
+  if (!res.ok) {
+    const e = new Error(`UTR profile ${res.status} for ${playerId}`);
+    e.status = res.status;
+    throw e;
+  }
+  const j = await res.json();
+  const counts = j?.resultCountsSingles ?? j?.player?.resultCountsSingles ?? null;
+  if (!counts) return null;
+  return singlesMatchesFromYearBuckets(counts);
 }
 
 /** Serialises lookups with a delay — this is an undocumented public endpoint. */

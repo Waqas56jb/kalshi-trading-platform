@@ -554,10 +554,10 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     const shadow = await runShadowCycle(kalshi).catch(e => ({
       error: String(e.message).slice(0, 160),
     }));
-    /* Paper-fill today's wrongly held edges at the ask we already recorded. */
-    /* Reanalyze held bets under new formula; paper-fill at recorded ask. */
-    const replay = await paperReplayWrongHolds({ hours: 72, stakeUsd: 20, limit: 500 })
-      .catch(e => ({ error: String(e.message).slice(0, 120) }));
+    /* Replay of wrongly held tickets is OFF — Max/Robbie: it was polluting
+       P&L with learning fills tagged replay_wrong_hold. One-shot endpoint
+       /shadow/replay-holds remains if we ever need it. */
+    const replay = { skipped: 'disabled', replayed: 0 };
     await settleShadowTrades().catch(() => null);
 
     /* Paper and live fills settle themselves once Kalshi has a result — no

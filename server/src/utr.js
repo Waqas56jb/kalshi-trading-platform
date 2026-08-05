@@ -244,7 +244,7 @@ export async function lookupPlayer(name, {
   const utr3m = h.threeMonthRating != null ? Number(h.threeMonthRating) : null;
   const playerId = h.id ?? h.profileId ?? null;
   const matches12m = playerId != null
-    ? await fetchSinglesMatchesLastYear(playerId, { signal }).catch(() => null)
+    ? await fetchCompetitiveMatchesLastYear(playerId, { signal }).catch(() => null)
     : null;
 
   return {
@@ -260,47 +260,91 @@ export async function lookupPlayer(name, {
   };
 }
 
-/** Robbie/Max: both players need >15 singles results in the last year. */
+/** Robbie: both sides need >15 competitive singles in the last year. */
 export const MIN_UTR_MATCHES_12M = 15;
+/** Competitive = opponent within this many UTR points at match time. */
+export const COMPETITIVE_UTR_GAP = 2.0;
+
+/** Flatten event/draw nesting from UTR /results payloads. */
+export function flattenUtrResults(payload) {
+  const out = [];
+  for (const ev of payload?.events || []) {
+    for (const r of ev.results || []) out.push(r);
+    for (const d of ev.draws || []) {
+      for (const r of d.results || []) out.push(r);
+    }
+  }
+  if (Array.isArray(payload?.results)) out.push(...payload.results);
+  return out;
+}
 
 /**
- * Sum singles results on the UTR profile for the current + prior calendar year.
- * Profile only publishes yearly buckets (not a true rolling 12m without auth
- * stats) — this is the public proxy for "matches in the last year".
+ * Count completed singles where |winner UTR − loser UTR| ≤ maxGap and the
+ * match date falls on/after `sinceMs`.
  */
-export function singlesMatchesFromYearBuckets(resultCountsSingles, now = new Date()) {
-  const y = now.getFullYear();
+export function countCompetitiveMatches(results, {
+  maxGap = COMPETITIVE_UTR_GAP, sinceMs = 0,
+} = {}) {
   let n = 0;
-  for (const row of resultCountsSingles || []) {
-    const year = Number(row.key);
-    const c = Number(row.value) || 0;
-    if (year === y || year === y - 1) n += c;
+  for (const r of results || []) {
+    if (r.excludeFromRating) continue;
+    const t = r.date ? new Date(r.date).getTime() : NaN;
+    if (sinceMs && Number.isFinite(t) && t < sinceMs) continue;
+    const w = Number(r.players?.winner1?.singlesUtr ?? r.winner1?.singlesUtr);
+    const l = Number(r.players?.loser1?.singlesUtr ?? r.loser1?.singlesUtr);
+    if (!Number.isFinite(w) || !Number.isFinite(l) || w <= 0 || l <= 0) continue;
+    if (Math.abs(w - l) <= maxGap + 1e-9) n += 1;
   }
   return n;
 }
 
-/** Public profile → recent singles match count (no auth required). */
-export async function fetchSinglesMatchesLastYear(playerId, { signal } = {}) {
-  if (playerId == null || playerId === '') return null;
-  const url = `https://api.utrsports.net/v1/player/${encodeURIComponent(playerId)}/profile`;
+async function fetchResultsYear(playerId, year, { signal, token } = {}) {
+  const url = `https://api.utrsports.net/v1/player/${encodeURIComponent(playerId)}/results`
+    + `?year=${encodeURIComponent(year)}&type=singles`;
   const headers = {
     Accept: 'application/json',
     'User-Agent': 'Mozilla/5.0 (compatible; CourtEdge/1.0)',
+    Authorization: `Bearer ${token}`,
   };
-  const token = await utrToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-
   const res = await fetch(url, { signal, headers });
   if (!res.ok) {
-    const e = new Error(`UTR profile ${res.status} for ${playerId}`);
+    const e = new Error(`UTR results ${res.status} for ${playerId} year=${year}`);
     e.status = res.status;
     throw e;
   }
-  const j = await res.json();
-  const counts = j?.resultCountsSingles ?? j?.player?.resultCountsSingles ?? null;
-  if (!counts) return null;
-  return singlesMatchesFromYearBuckets(counts);
+  return res.json();
 }
+
+/**
+ * Competitive singles in the trailing year: abs(UTR gap) ≤ 2.0 at match time.
+ * Needs UTR login (results endpoint is auth-gated). Returns null if no token.
+ */
+export async function fetchCompetitiveMatchesLastYear(playerId, { signal } = {}) {
+  if (playerId == null || playerId === '') return null;
+  const token = await utrToken();
+  if (!token) return null;
+
+  const now = new Date();
+  const sinceMs = now.getTime() - 365 * 24 * 3600 * 1000;
+  const years = [now.getFullYear(), now.getFullYear() - 1];
+  const seen = new Set();
+  const results = [];
+
+  for (const year of years) {
+    const payload = await fetchResultsYear(playerId, year, { signal, token });
+    for (const r of flattenUtrResults(payload)) {
+      const id = r.id ?? `${r.date}:${r.players?.winner1?.id}:${r.players?.loser1?.id}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      results.push(r);
+    }
+  }
+
+  return countCompetitiveMatches(results, { maxGap: COMPETITIVE_UTR_GAP, sinceMs });
+}
+
+/** @deprecated use fetchCompetitiveMatchesLastYear */
+export const fetchSinglesMatchesLastYear = fetchCompetitiveMatchesLastYear;
 
 /** Serialises lookups with a delay — this is an undocumented public endpoint. */
 export async function lookupMany(names, { gender, delayMs = 260, onResult, signal } = {}) {

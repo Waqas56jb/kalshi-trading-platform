@@ -63,8 +63,8 @@ export default function Shadow() {
         No big underdogs: <span className="text-text">ask and fair ≥ {mode?.minPriceCents ?? 35}¢</span>
         {' '}— 35–50¢ band and favourites stay in.
         Fair gap is <span className="text-text">50% singles UTR + 50% 3-month UTR</span>.
-        Both players need <span className="text-text">&gt;{s?.minUtrMatches12m ?? 15} UTR singles matches</span>
-        {' '}(last year on profile) or we hold.
+        Both players need <span className="text-text">&gt;{s?.minUtrMatches12m ?? 15} competitive UTR matches</span>
+        {' '}(within {s?.competitiveUtrGap ?? 2} UTR, last year) or we hold.
         Odds checker is optional on ITF — full stake with or without books.
       </div>
 

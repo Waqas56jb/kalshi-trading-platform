@@ -2,7 +2,7 @@ import { config, t } from './config.js';
 import { query } from './db.js';
 import { looksInPlay } from './model.js';
 import { evaluateBet, kalshiFeeRate, probabilityBucket, utrBracket } from './risk.js';
-import { MIN_UTR_MATCHES_12M } from './utr.js';
+import { COMPETITIVE_UTR_GAP, MIN_UTR_MATCHES_12M } from './utr.js';
 import { calibrationMap, derivedLimits } from './calibration.js';
 import { bookConsensus } from './crossmarket.js';
 import { marketProbability, QUOTE_REASONS } from './quote.js';
@@ -458,8 +458,8 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
       continue;
     }
 
-    /* Robbie: both players need >15 UTR singles matches in the last year
-       (profile current + prior calendar year). Missing count = hold. */
+    /* Robbie: both players need >15 competitive UTR singles in the last year
+       (opponent within 2.0 UTR at match time). Missing count = hold. */
     const myMatches = c.utr_matches_12m == null ? null : Number(c.utr_matches_12m);
     const oppMatches = c.opponent_utr_matches_12m == null ? null : Number(c.opponent_utr_matches_12m);
     const thinSample = myMatches == null || oppMatches == null
@@ -475,7 +475,8 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
           stakeCents: 0,
           contracts: 0,
           limitingConstraint: 'utr sample',
-          rejectionReason: `Need >${MIN_UTR_MATCHES_12M} UTR singles matches (last year) on both sides `
+          rejectionReason: `Need >${MIN_UTR_MATCHES_12M} competitive UTR matches `
+            + `(within ${COMPETITIVE_UTR_GAP} UTR, last year) on both sides `
             + `(${c.player_name}: ${myMatches ?? 'unknown'}, `
             + `${c.opponent_name}: ${oppMatches ?? 'unknown'}).`,
         },
@@ -1135,7 +1136,8 @@ export async function shadowSummary() {
     monitors.push({
       id: 'utr_sample_holds',
       severity: 'info',
-      message: `${sampleHolds} hold(s) in last 12h for thin UTR sample (need >${MIN_UTR_MATCHES_12M} matches/side).`,
+      message: `${sampleHolds} hold(s) in last 12h for thin UTR sample `
+        + `(need >${MIN_UTR_MATCHES_12M} competitive matches within ${COMPETITIVE_UTR_GAP} UTR / side).`,
     });
   }
 
@@ -1205,6 +1207,7 @@ export async function shadowSummary() {
     monitors,
     floor: { raw: rawFloor, live: liveFloor, cappedAt: 35, appliesTo: 'ask_and_fair' },
     minUtrMatches12m: MIN_UTR_MATCHES_12M,
+    competitiveUtrGap: COMPETITIVE_UTR_GAP,
   };
 }
 

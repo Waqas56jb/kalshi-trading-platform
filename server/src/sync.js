@@ -491,7 +491,22 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     /* Drop Projected / weak-match numbers so the tighter lookup can re-resolve
        (wrong Kuznetsova / low Dreycopp-style junk left from older matching). */
     await scrubUnusableRatings().catch(() => null);
-    /* Higher limit while utr_3m backfills for the 50/50 blend (was 40). */
+    /* One-time: old utr_matches_12m was any-match count; recount as competitive
+       (within 2.0 UTR). Flag in derived_limits so we only wipe once. */
+    await query(
+      `update ${t('players')} set utr_matches_12m = null,
+         lookup_attempted_at = least(lookup_attempted_at, now() - interval '13 hours')
+       where utr_matches_12m is not null
+         and not exists (
+           select 1 from ${t('derived_limits')} where name = 'utr_competitive_v1'
+         )`,
+    ).catch(() => null);
+    await query(
+      `insert into ${t('derived_limits')} (name, value, unit, sample_size, evidence, computed_at)
+       values ('utr_competitive_v1', 1, 'flag', 0, '{}'::jsonb, now())
+       on conflict (name) do nothing`,
+    ).catch(() => null);
+    /* Higher limit while utr_3m + competitive match counts backfill. */
     await backfillRatings({ limit: 80, delayMs: 100 }).catch(() => null);
 
     /* Zero pre-new-formula placed P&L (old 6) and apply looser volume settings. */

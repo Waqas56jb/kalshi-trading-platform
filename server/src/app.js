@@ -8,6 +8,7 @@ import {
   buildDataset, datasetSummary, buildBreakdowns, breakdownRows,
   COLUMNS, FEATURE_COLUMNS, TARGET_COLUMN, RANGE_NAMES, BREAKDOWN_COLUMNS,
 } from './dataset.js';
+import { clvSummary } from './clv.js';
 import { toCsv, toXlsx } from './xlsx.js';
 import {
   runShadowCycle, shadowSummary, loadRiskConfig, gateComparison,
@@ -537,6 +538,18 @@ export function createApp() {
   /** One-shot paper replay of wrongly held asks for learning (Max/Robbie). */
   api.post('/shadow/replay-holds', requireAuth, h(async (_req, res) => {
     res.json(await paperReplayWrongHolds({ hours: 48, stakeUsd: 20 }));
+  }));
+
+  /**
+   * Closing-line value: what we paid against where the market ended.
+   *
+   * The number to watch is avgClvVsKalshi. It needs no external feed, so it is
+   * populated for every settled position, and it answers the edge question far
+   * sooner than P&L can.
+   */
+  api.get('/clv', requireAuth, h(async (req, res) => {
+    const days = Math.min(365, Number(req.query.days) || 60);
+    res.json(await clvSummary({ days }));
   }));
 
   /* ------------------------------------------------------------ calibration */

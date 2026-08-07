@@ -596,6 +596,14 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     await refitUtrCurve({ minSample: 40 }).catch(() => null);
     await deriveMinimumPrice().catch(() => null);
 
+    /* Closing-line value. Entry prices are recorded as positions are taken and
+       scored once the match settles, so a late odds feed costs nothing: we are
+       comparing against the close rather than waiting on it. Beating the close is
+       the fastest honest read on edge — at this volume P&L needs months to
+       separate skill from variance, CLV needs weeks. */
+    await backfillEntries().catch(() => null);
+    await captureClosingLines({ limit: 60 }).catch(() => null);
+
     /* Run the exit rules — take-profit, stop-loss and sell-at-fair.
        These used to be reached only from the reconcile cron, which has never run
        because its repository secrets were never set, so positions sailed past

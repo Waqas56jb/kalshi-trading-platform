@@ -5,7 +5,7 @@ import { evaluateBet, kalshiFeeRate, probabilityBucket, utrBracket } from './ris
 import { COMPETITIVE_UTR_GAP, MIN_UTR_MATCHES_12M } from './utr.js';
 import { calibrationMap, derivedLimits } from './calibration.js';
 import { bookConsensus } from './crossmarket.js';
-import { marketProbability, QUOTE_REASONS } from './quote.js';
+import { marketProbability, QUOTE_REASONS, MIN_BUY_ASK_CENTS } from './quote.js';
 import { autoPlaceApproved } from './orders.js';
 import { insertTrade } from './repo.js';
 import { oddsFeedConfigured, quotesForMatch } from './oddsfeed.js';
@@ -78,7 +78,7 @@ export async function loadRiskConfig() {
     sub10MinRoi: n(s.sub10_min_roi, 0.20),
     absoluteMinProbability: n(s.absolute_min_probability, 0.05),
     /* Min ask + min fair (¢). Desk cut big underdogs at 35¢ (was 25¢ fair-only). */
-    minPriceCents: n(s.min_price_cents, 35),
+    minPriceCents: n(s.min_price_cents, MIN_BUY_ASK_CENTS),
 
     crossMarketEnabled: s.cross_market_enabled === true,
     /* Was 3pp / 2 books — too strict for ITF early rounds. */
@@ -256,7 +256,11 @@ export async function runShadowCycle(kalshi, { verbose = false } = {}) {
 
   /* Hard underdog floor: ask + fair ≥ 35¢. Derived measure cannot raise this
      (would wipe Max's 35–50 band) or lower it below 35. */
-  cfg.minPriceCents = 35;
+  /* The floor comes from the desk's own settled results, clamped to the buy band
+     the client set. Assigning a constant here discarded a value derived from 858
+     bets on the line that computed it, so the two systems that set this fought
+     each other and the measured one always lost. */
+  cfg.minPriceCents = MIN_BUY_ASK_CENTS;
 
   /* Entries are pre-match only — the client's rule, and the model's too: the
      UTR signal is a pre-match estimate that says nothing about a match in
@@ -766,7 +770,7 @@ export async function settleShadowTrades() {
 export async function paperReplayWrongHolds({ hours = 72, stakeUsd = 20, limit = 500 } = {}) {
   await ensureShadowArchiveColumn();
   const cfg = await loadRiskConfig();
-  const fairFloor = Math.max(35, cfg.minPriceCents ?? 35);
+  const fairFloor = Math.max(MIN_BUY_ASK_CENTS, cfg.minPriceCents ?? MIN_BUY_ASK_CENTS);
 
   /* Permanent holds the new formula still rejects — never paper-force these. */
   const permanent = [
@@ -1097,7 +1101,7 @@ export async function shadowSummary() {
   const limits = await derivedLimits().catch(() => ({}));
   const rawFloor = limits.minimum_price?.value != null
     ? Math.round(Number(limits.minimum_price.value)) : null;
-  const liveFloor = 35;
+  const liveFloor = MIN_BUY_ASK_CENTS;
   const spreadHolds = reasons.rows
     .filter(r => /spread/i.test(r.rejection_reason || '')
       || /spread/i.test(r.limiting_constraint || ''))
@@ -1107,7 +1111,7 @@ export async function shadowSummary() {
       || /fair-value floor|underdog floor|below the .*floor/i.test(r.rejection_reason || ''))
     .reduce((n, r) => n + Number(r.n), 0);
   const monitors = [];
-  if (rawFloor != null && rawFloor > 35) {
+  if (rawFloor != null && rawFloor > MIN_BUY_ASK_CENTS) {
     monitors.push({
       id: 'floor_uncapped',
       severity: 'error',

@@ -19,6 +19,8 @@
 
 /* --------------------------------------------------------------- helpers */
 
+import { MIN_BUY_ASK_CENTS } from './quote.js';
+
 const clamp01 = v => Math.min(1, Math.max(0, v));
 
 /**
@@ -321,7 +323,8 @@ export function evaluateBet({ opportunity, portfolio, calibration, health, cfg, 
      Keeps the 35–50¢ band and favourites; cuts the <35¢ longshot bucket. */
   const askCents = Math.round(bestAsk * 100);
   const fairCents = Math.round((opp.modelProbability ?? 0) * 100);
-  const floor = cfg.minPriceCents ?? 35;
+  // one definition of the buy band, in quote.js; this must never drift from it
+  const floor = cfg.minPriceCents ?? MIN_BUY_ASK_CENTS;
   if (askCents < floor) {
     return reject(
       `Best ask ${askCents}c is below the ${floor}c underdog floor.`,

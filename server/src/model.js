@@ -243,16 +243,22 @@ export function buildSignalsForEvent(markets, players, curve = null, logisticK =
     const oppUtr = blendUtr(oppSingles, rated3m(you));
 
     const gap = myUtr != null && oppUtr != null ? +(myUtr - oppUtr).toFixed(2) : null;
-    /* Pricing preference, best evidence first: the smooth logistic fitted to
-       settled matches; the bracket-interpolated curve while no slope has been
-       fitted yet; the hand-written estimate when there is no fit at all. */
-    /* Max's piecewise anchors first — they are the numbers the desk wants on
-       the terminal. A usable fitted logistic may refine later; a collapsed one
-       never overrides Max's curve again (the 60c-at-Δ1.1 bug). */
-    const fair = gap == null ? null
-      : (fairFromGap(gap)
-        ?? fairFromLogistic(gap, logisticK)
-        ?? (curve?.length ? fairFromFittedCurve(gap, curve) : null));
+    /* Max's piecewise anchors price the desk. The fitted logistic and the
+       fitted bracket curve are computed and shown on the Model page, but they do
+       not price, and the `??` chain that used to sit here implied otherwise while
+       being unreachable: fairFromGap only returns null when the gap is null, and
+       then the other two return null too, so neither fallback could ever fire.
+
+       Keeping the anchors is not sentiment. Scored over 1,016 settled matches
+       the three curves are indistinguishable — Brier 0.1989 for the anchors,
+       0.1990 for the logistic, 0.2019 for the brackets, against 0.2500 for
+       saying 50% every time. Swapping them buys nothing, so the desk keeps the
+       curve Max reads on the terminal and the fits stay as diagnostics.
+
+       The real signal, which none of these curves fixes, is that the market
+       scores 0.0976 on the same matches. The rating gap carries about a fifth of
+       the information the market already has. */
+    const fair = gap == null ? null : fairFromGap(gap);
     const price = executablePrice(m);
     const ev = fair != null ? evPct(fair, price) : null;
 

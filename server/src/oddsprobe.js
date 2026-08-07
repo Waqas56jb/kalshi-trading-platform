@@ -15,7 +15,8 @@ import { bookConsensus } from './crossmarket.js';
  * A miss is written as deliberately as a hit. Without the empty rows, a feed
  * that never returns anything looks identical to one nobody ever asked.
  */
-export async function probeOdds({ limit = 25 } = {}) {
+export async function probeOdds({ limit = 8, budgetMs = 12000 } = {}) {
+  const deadline = Date.now() + budgetMs;
   if (!oddsFeedConfigured()) return { skipped: 'odds_feed_not_configured' };
 
   /* Upcoming and in-flight markets, most imminent first, one side per event so a
@@ -39,6 +40,11 @@ export async function probeOdds({ limit = 25 } = {}) {
   let hits = 0;
 
   for (const r of rows) {
+    /* Hard time budget. The sync has a 60-second ceiling on Vercel and market
+       data matters more than a probe, so the loop stops rather than risk the
+       whole run. Whatever was gathered is still written. */
+    if (Date.now() > deadline) break;
+
     let books = 0;
     let consensusCents = null;
     let fixtureFound = false;
@@ -81,6 +87,8 @@ export async function probeOdds({ limit = 25 } = {}) {
       error,
     });
   }
+
+  if (!out.length) return { probed: 0, hits: 0, fixturesFound: 0 };
 
   const col = f => out.map(f);
   await query(

@@ -12,6 +12,8 @@ import { settleResolvedTrades, tagOversizedAlertPathFills } from './repo.js';
 import {
   recomputeCalibration, refitUtrCurve, loadUtrCurve, loadUtrSlope, deriveMinimumPrice,
 } from './calibration.js';
+import { backfillEntries, captureClosingLines } from './clv.js';
+import { probeOdds } from './oddsprobe.js';
 import { query, tx } from './db.js';
 import { assessQuote } from './quote.js';
 import {
@@ -608,7 +610,12 @@ export async function runSync(kalshi, { verbose = false } = {}) {
        every cycle, misses as well as hits, with how long before the match the
        attempt was made. A day of this answers a question that has so far only
        been argued about. */
-    await probeOdds({ limit: 25 }).catch(() => null);
+    /* Eight per cycle, not twenty-five. Each probe is a sequential API call and
+       twenty-five of them pushed the sync to 130 seconds, past Vercel's 60-second
+       ceiling — the whole run then died and took the market data with it. The
+       cron fires every five minutes, so eight a cycle still walks the whole board
+       many times a day. */
+    await probeOdds({ limit: 8 }).catch(() => null);
 
     /* Run the exit rules — take-profit, stop-loss and sell-at-fair.
        These used to be reached only from the reconcile cron, which has never run

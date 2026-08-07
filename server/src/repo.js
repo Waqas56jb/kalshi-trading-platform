@@ -644,7 +644,8 @@ export async function lastSync() {
     () => query(
       `select id, started_at, finished_at, status, markets_seen, signals_computed,
               alerts_created, latency_ms, error
-       from ${t('sync_runs')} where finished_at is not null
+       from ${t('sync_runs')}
+       where finished_at is not null and status <> 'abandoned'
        order by finished_at desc limit 1`),
     () => query(
       `select count(*)::int n from ${t('sync_runs')}

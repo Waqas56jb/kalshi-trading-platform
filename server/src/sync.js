@@ -686,8 +686,13 @@ export async function maybeAutoSync(kalshi, { maxAgeSeconds = 60 } = {}) {
  */
 export async function reapStaleRuns() {
   const r = await query(
-    `update ${t('sync_runs')} set status = 'error', finished_at = now(),
-       error = coalesce(error, 'abandoned — process restarted mid-sync')
+    /* 'abandoned', not 'error'. A run whose process was recycled mid-flight is
+       not a failure — the work it had already committed is committed, and on
+       serverless it happens routinely because every invocation is a fresh
+       process. Filing it as an error made two runs in five look broken and
+       buried the genuine failures among them. */
+    `update ${t('sync_runs')} set status = 'abandoned', finished_at = now(),
+       error = coalesce(error, 'process restarted mid-sync')
      where status = 'running' and started_at < now() - interval '2 minutes'
      returning id`,
   );

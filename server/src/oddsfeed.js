@@ -44,6 +44,20 @@ const normName = s => String(s ?? '')
 
 const pairKey = (a, b) => [normName(a), normName(b)].sort().join('|');
 
+/* A second, looser key on surnames alone.
+   The full-name key requires both sources to spell every part identically, and
+   they do not: Kalshi carries "Felipe Meligeni Alves" where the books may have
+   dropped a middle name, abbreviated a first name, or transliterated it
+   differently. Only 2 of 25 of our matches were being found, and almost all of
+   the misses were the same two players under slightly different names.
+   Surnames survive that. The longest token in each name is used as a proxy,
+   which beats "last word" because the sources do not agree on word order. */
+const surnameKey = (a, b) => {
+  const longest = n => normName(n).split(' ')
+    .reduce((best, w) => (w.length > best.length ? w : best), '');
+  return [longest(a), longest(b)].sort().join('|');
+};
+
 /* ------------------------------------------------------------ fixture index */
 
 const FIXTURE_TTL_MS = 10 * 60 * 1000;
@@ -66,6 +80,16 @@ async function buildFixtureIndex() {
         const p2 = f?.player2?.name;
         if (!f?.id || !p1 || !p2) continue;
         map.set(pairKey(p1, p2), { id: f.id, p1, p2 });
+        /* Only recorded when it does not collide. Two different matches sharing
+           a surname pair would make the loose key ambiguous, and a wrong fixture
+           is far worse than no fixture — it would price one match off another
+           match's odds. */
+        const loose = surnameKey(p1, p2);
+        if (loose.length > 3) {
+          map.set(`~${loose}`, map.has(`~${loose}`)
+            ? { ambiguous: true }
+            : { id: f.id, p1, p2, viaSurname: true });
+        }
       }
       if (!j?.hasNextPage) break;
     }
@@ -258,7 +282,13 @@ export async function quotesForMatch(playerName, opponentName) {
   if (!oddsFeedConfigured() || !playerName || !opponentName) return null;
 
   const idx = await fixtureIndex();
-  const fx = idx.get(pairKey(playerName, opponentName));
+  /* Exact full-name pair first; surnames only if that misses, and never when the
+     surname pair matched more than one fixture. */
+  let fx = idx.get(pairKey(playerName, opponentName));
+  if (!fx) {
+    const loose = idx.get(`~${surnameKey(playerName, opponentName)}`);
+    if (loose && !loose.ambiguous) fx = loose;
+  }
   if (!fx) return null;
 
   let cached = oddsCache.get(fx.id);

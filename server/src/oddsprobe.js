@@ -31,7 +31,7 @@ export async function probeOdds({ limit = 8, budgetMs = 12000 } = {}) {
      where m.status in ('active','open','initialized')
        and s.opponent_name is not null
        and m.match_date >= current_date - 1
-     order by m.event_ticker, m.close_time nulls last
+     order by m.event_ticker, m.match_date nulls last
      limit $1`, [limit]);
 
   if (!rows.length) return { probed: 0, hits: 0 };
@@ -63,12 +63,17 @@ export async function probeOdds({ limit = 8, budgetMs = 12000 } = {}) {
       error = String(e.message).slice(0, 150);
     }
 
-    /* close_time is when Kalshi settles, which for tennis is roughly the end of
-       the match rather than the start. It is the only timing Kalshi gives us, so
-       it is what "hours to match" is measured against — approximate, and
-       consistent, which is what matters for comparing one probe with another. */
-    const hoursTo = r.close_time
-      ? +((new Date(r.close_time).getTime() - Date.now()) / 3_600_000).toFixed(2)
+    /* Lead time is measured from the match DATE in the ticker, not close_time.
+       Kalshi's close_time on a live ITF market averages 335 hours out — the
+       nearest is a fortnight away — so measuring against it put every probe in
+       the "more than 24 hours before" bucket and tested nothing. The ticker's
+       date is the one piece of timing Kalshi gets right.
+       Matches are assumed to run through the day, so the reference is the end of
+       the match date in Pacific: approximate, but consistent, which is what
+       matters for comparing one probe against another. */
+    const hoursTo = r.match_date
+      ? +((new Date(`${new Date(r.match_date).toISOString().slice(0, 10)}T23:59:59-07:00`).getTime()
+          - Date.now()) / 3_600_000).toFixed(2)
       : null;
 
     out.push({

@@ -9,6 +9,7 @@ import {
   COLUMNS, FEATURE_COLUMNS, TARGET_COLUMN, RANGE_NAMES, BREAKDOWN_COLUMNS,
 } from './dataset.js';
 import { clvSummary } from './clv.js';
+import { probeSummary } from './oddsprobe.js';
 import { toCsv, toXlsx } from './xlsx.js';
 import {
   runShadowCycle, shadowSummary, loadRiskConfig, gateComparison,
@@ -547,6 +548,12 @@ export function createApp() {
    * populated for every settled position, and it answers the edge question far
    * sooner than P&L can.
    */
+  /** Whether the odds feed ever publishes for our matches, and how close to the off. */
+  api.get('/odds/probe', requireAuth, h(async (req, res) => {
+    const hours = Math.min(720, Number(req.query.hours) || 24);
+    res.json(await probeSummary({ hours }));
+  }));
+
   api.get('/clv', requireAuth, h(async (req, res) => {
     const days = Math.min(365, Number(req.query.days) || 60);
     res.json(await clvSummary({ days }));

@@ -604,6 +604,12 @@ export async function runSync(kalshi, { verbose = false } = {}) {
     await backfillEntries().catch(() => null);
     await captureClosingLines({ limit: 60 }).catch(() => null);
 
+    /* Does the odds feed ever publish for our matches, and how late? Logged
+       every cycle, misses as well as hits, with how long before the match the
+       attempt was made. A day of this answers a question that has so far only
+       been argued about. */
+    await probeOdds({ limit: 25 }).catch(() => null);
+
     /* Run the exit rules — take-profit, stop-loss and sell-at-fair.
        These used to be reached only from the reconcile cron, which has never run
        because its repository secrets were never set, so positions sailed past

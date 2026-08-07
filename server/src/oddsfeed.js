@@ -141,6 +141,43 @@ export function parseOddsSummary(payload) {
   const r = payload?.result ?? payload?.data ?? null;
   if (!r) return out;
 
+  /* The shape this API actually returns, which none of the array forms below
+     match and which is why the desk saw "no odds" while Bet365 and MelBet were
+     both quoting:
+
+       result: {
+         Bet365: { "Full Time Result": {
+           kickoff: { od1: "2.000", od2: "1.727", sourceAddTime: 1780369227 },
+           end:     { od1: "1.010", od2: "15.000" },
+           start:   null } },
+         MelBet: { ... } }
+
+     Book name is the key. `kickoff` is the price at the off, which is the
+     closing line we want; `end` is post-match and useless as a benchmark, so it
+     is only taken when nothing better exists. od1 and od2 are decimal odds for
+     the fixture's own player order. */
+  const nested = [];
+  for (const [book, markets] of Object.entries(r)) {
+    if (!markets || typeof markets !== 'object' || Array.isArray(markets)) continue;
+    for (const [marketName, snapshots] of Object.entries(markets)) {
+      if (!/full time result|match winner|winner|1x2/i.test(marketName)) continue;
+      if (!snapshots || typeof snapshots !== 'object') continue;
+      const snap = snapshots.kickoff ?? snapshots.start ?? snapshots.end ?? null;
+      if (!snap) continue;
+      const o1 = Number(snap.od1);
+      const o2 = Number(snap.od2);
+      if (o1 > 1 && o2 > 1) {
+        nested.push({
+          book: String(book),
+          forPlayer1: o1,
+          forPlayer2: o2,
+          takenAt: snapshots.kickoff ? 'kickoff' : snapshots.start ? 'start' : 'end',
+        });
+      }
+    }
+  }
+  if (nested.length) return nested;
+
   const candidates = [r.bookmakers, r.odds, r.books, r.list, Array.isArray(r) ? r : null]
     .filter(Array.isArray);
   for (const list of candidates) {

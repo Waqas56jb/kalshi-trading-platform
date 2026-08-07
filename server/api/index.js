@@ -18,6 +18,8 @@
  * requests. Sync cannot run on a timer here — a serverless function is frozen
  * between requests — so Cron drives it by calling /api/sync.
  */
+import { installResilientDns } from '../src/resolver.js';
+installResilientDns();
 import { createApp } from '../src/app.js';
 
 const { app } = createApp();

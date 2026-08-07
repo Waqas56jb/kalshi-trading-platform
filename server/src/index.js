@@ -5,10 +5,18 @@
  * Cron, because a serverless function is frozen between requests and cannot
  * hold a timer.
  */
+import { installResilientDns } from './resolver.js';
 import { createApp } from './app.js';
 import { config } from './config.js';
 import { reapStaleRuns, startSyncLoop } from './sync.js';
 import { checkKalshiAuth } from './orders.js';
+
+/* Before anything opens a socket. Some networks answer port-53 queries for
+   api.elections.kalshi.com with NXDOMAIN while the domain resolves fine
+   everywhere else, which makes every call fail as "fetch failed" and reads like
+   an outage or a bad key. The system resolver is still tried first; this only
+   catches it when that fails. */
+installResilientDns();
 
 const { app, kalshi } = createApp();
 
